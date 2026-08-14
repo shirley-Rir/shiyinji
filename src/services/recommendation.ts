@@ -2,13 +2,13 @@ import type { MusicProvider } from "@/src/providers";
 import type { RankedTrack, RecommendationPlan, ScoreBreakdown, StructuredContext, TrackCandidate, UserProfile } from "@/src/domain";
 
 export class RecommendationService {
-  readonly modelVersion = "weighted-ranker-v1";
+  readonly modelVersion = "weighted-ranker-v2";
 
   constructor(private readonly musicProvider: MusicProvider) {}
 
   async recommend(context: StructuredContext, profile: UserProfile, count = 5): Promise<RecommendationPlan> {
     const candidates = await this.musicProvider.retrieveCandidates({ context, profile, limit: 100 });
-    const playableIds = new Set(await this.musicProvider.filterPlayable(candidates.map((track) => track.id)));
+    const playableIds = new Set(await this.musicProvider.filterPlayable(candidates.map((track) => track.id), profile.userId));
     const filtered = candidates.filter((track) => playableIds.has(track.id) && !profile.negativeTrackIds.includes(track.id) && !violatesHardConstraints(track, context));
 
     const ranked = filtered
@@ -32,7 +32,8 @@ function scoreTrack(track: TrackCandidate, context: StructuredContext, profile: 
   const energyFit = 1 - Math.min(1, Math.abs(track.features.energy - context.targetEnergy) / 70);
   const valenceFit = 1 - Math.min(1, Math.abs(track.features.valence - context.valence) / 2);
   const contextMatch = clamp(semanticOverlap * 0.5 + energyFit * 0.35 + valenceFit * 0.15);
-  const explicitPreference = clamp(overlap(profile.explicit.likedGenres, track.features.genres) * 0.65 + overlap(profile.explicit.languages, track.features.languages) * 0.35);
+  const artistPreference = profile.explicit.likedArtists.some((artist) => track.artist.includes(artist)) ? 1 : 0;
+  const explicitPreference = clamp(overlap(profile.explicit.likedGenres, track.features.genres) * 0.45 + overlap(profile.explicit.languages, track.features.languages) * 0.2 + artistPreference * 0.35);
   const scene = sceneKey(context);
   const scenePreference = profile.scenePreferences[scene];
   const sceneProfileMatch = scenePreference
@@ -57,13 +58,13 @@ function scoreTrack(track: TrackCandidate, context: StructuredContext, profile: 
   };
 
   const score =
-    contextMatch * 0.35 +
-    explicitPreference * 0.2 +
-    sceneProfileMatch * 0.15 +
-    longTermAffinity * 0.1 +
-    familiarityFit * 0.08 +
-    transitionFit * 0.07 +
-    explorationValue * 0.05 -
+    contextMatch * 0.34 +
+    explicitPreference * 0.17 +
+    sceneProfileMatch * 0.14 +
+    longTermAffinity * 0.08 +
+    familiarityFit * 0.15 +
+    transitionFit * 0.08 +
+    explorationValue * 0.04 -
     negativeFeedbackPenalty;
 
   return {
@@ -93,6 +94,7 @@ function diversify(ranked: Array<Omit<RankedTrack, "position" | "role">>) {
 
 function recommendationReason(track: TrackCandidate, context: StructuredContext, contextMatch: number, familiarityFit: number) {
   const direction = context.targetMood[0] ?? "自然过渡";
+  if (track.features.familiarity > 0.75 && context.familiarityBias > 0.55) return `来自账号里的熟悉声音，同时把能量控制在此刻需要的范围`;
   if (contextMatch > 0.72) return `${track.tags[0]}的质感贴近此刻，并慢慢走向${direction}`;
   if (familiarityFit > 0.75) return `保留合适的熟悉感，同时把能量控制在当前需要的范围`;
   return `在${track.tags[0]}方向上提供一个不过分打扰的备选`;

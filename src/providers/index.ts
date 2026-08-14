@@ -5,9 +5,12 @@ import type { AIProvider } from "./ai/types";
 import { MockMusicProvider } from "./music/mock";
 import { NcmApiClient } from "./music/netease-client";
 import { NeteaseMusicProvider } from "./music/netease";
+import { NcmSessionManager } from "./music/netease-session";
 
 export const aiProvider = createAIProvider();
-export const musicProvider = createMusicProvider();
+const music = createMusicProvider();
+export const musicProvider = music.provider;
+export const neteaseSessionManager = music.sessions;
 
 export type { AIProvider } from "./ai/types";
 export type { MusicProvider } from "./music/types";
@@ -32,10 +35,15 @@ class MisconfiguredAIProvider implements AIProvider {
 }
 
 function createMusicProvider() {
-  if (env.MUSIC_PROVIDER !== "netease") return new MockMusicProvider();
+  if (env.MUSIC_PROVIDER !== "netease") return { provider: new MockMusicProvider(), sessions: null };
   const client = new NcmApiClient(env.NCM_API_BASE_URL ?? "http://127.0.0.1:4000");
-  return new NeteaseMusicProvider(client, {
+  const sessions = new NcmSessionManager(client, {
+    authMode: env.NCM_AUTH_MODE ?? "none",
+    phone: env.NCM_PHONE,
+    md5Password: env.NCM_MD5_PASSWORD,
+  });
+  return { provider: new NeteaseMusicProvider(client, {
     playbackLevel: env.NCM_PLAYBACK_LEVEL ?? "standard",
     allowTrial: env.NCM_ALLOW_TRIAL === "true",
-  });
+  }, sessions), sessions };
 }

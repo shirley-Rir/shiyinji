@@ -31,7 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { adjustRecommendation, createContextRecommendation, getHistory, getProfile, recordPlayback, resolvePlayback, sendFeedback, updatePrivacy, type ApiContext, type ApiProfile, type ApiTrack } from "@/src/client/api";
+import { adjustRecommendation, checkNeteaseQr, createContextRecommendation, createNeteaseQr, disconnectNetease, getHistory, getNeteaseConnection, getProfile, recordPlayback, resolvePlayback, sendFeedback, updatePrivacy, type ApiContext, type ApiProfile, type ApiTrack, type NeteaseConnection } from "@/src/client/api";
 import { prepareContextImage } from "@/src/client/image";
 
 type View = "listen" | "history" | "profile" | "settings";
@@ -344,6 +344,8 @@ export function MusicApp() {
                 />
                 {imageUrl && (
                   <div className="image-preview">
+                    {/* Object URLs are already compressed locally and cannot use a remote image loader. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={imageUrl} alt="用户上传的情境预览" />
                     <div>
                       <strong>{imageName}</strong>
@@ -552,7 +554,57 @@ function ProfileView() {
 }
 
 function SettingsView({ personalization, setPersonalization }: { personalization: boolean; setPersonalization: (value: boolean) => void }) {
+  const [connection, setConnection] = useState<NeteaseConnection | null>(null);
+  const [qrKey, setQrKey] = useState("");
+  const [qrImage, setQrImage] = useState("");
+  const [connectionError, setConnectionError] = useState("");
+  const [connectionLoading, setConnectionLoading] = useState(false);
   useEffect(() => { getProfile().then((result) => setPersonalization(result.profile.personalization_enabled)); }, [setPersonalization]);
+  useEffect(() => { getNeteaseConnection().then((result) => setConnection(result.connection)).catch(() => setConnectionError("音乐服务状态暂时无法读取")); }, []);
+  useEffect(() => {
+    if (!qrKey) return;
+    let active = true;
+    const timer = window.setInterval(async () => {
+      try {
+        const result = await checkNeteaseQr(qrKey);
+        if (!active) return;
+        setConnection(result.connection);
+        if (result.connection.status === "connected" || result.connection.status === "disconnected") {
+          setQrKey("");
+          setQrImage("");
+        }
+      } catch {
+        if (active) setConnectionError("二维码状态读取失败，请重新生成");
+      }
+    }, 2200);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [qrKey]);
+
+  async function connectNetease() {
+    try {
+      setConnectionLoading(true);
+      setConnectionError("");
+      const result = await createNeteaseQr();
+      setQrKey(result.key);
+      setQrImage(result.qr_image);
+      setConnection((current) => ({ status: "waiting", source: null, connectedAt: null, message: null, taste: current?.taste ?? null }));
+    } catch {
+      setConnectionError("二维码生成失败，请确认本地网易云服务正在运行");
+    } finally {
+      setConnectionLoading(false);
+    }
+  }
+
+  async function disconnectMusic() {
+    try {
+      await disconnectNetease();
+      setConnection({ status: "disconnected", source: null, connectedAt: null, message: null, taste: null });
+      setQrKey("");
+      setQrImage("");
+    } catch {
+      setConnectionError("暂时无法断开音乐账号");
+    }
+  }
   async function togglePersonalization() {
     const next = !personalization;
     setPersonalization(next);
@@ -565,13 +617,34 @@ function SettingsView({ personalization, setPersonalization }: { personalization
   }
   return (
     <section className="subpage settings-page">
-      <div className="subpage-heading"><p className="eyebrow">设置与隐私</p><h1>你的数据，由你决定</h1><p>画像、情境和反馈现已绑定当前账号；第三方音乐服务仍未连接。</p></div>
+      <div className="subpage-heading"><p className="eyebrow">设置与隐私</p><h1>你的数据，由你决定</h1><p>画像、情境和反馈绑定当前账号；网易授权只在服务端用于读取音乐偏好和播放权限。</p></div>
       <div className="settings-list">
         <div className="setting-row"><div className="setting-icon"><Sparkles size={19} /></div><div><strong>个性化学习</strong><span>用播放、跳过和反馈改进跨会话推荐</span></div><button className={`toggle ${personalization ? "is-on" : ""}`} onClick={() => void togglePersonalization()} aria-label="切换个性化学习"><span /></button></div>
-        <div className="setting-row"><div className="setting-icon"><Unplug size={19} /></div><div><strong>网易云音乐</strong><span>尚未连接 · 后续仅使用扫码或会话授权</span></div><button className="text-action">准备接入 <ChevronRight size={15} /></button></div>
+        <div className="setting-row"><div className="setting-icon"><Unplug size={19} /></div><div><strong>网易云音乐</strong><span>{connectionDescription(connection)}</span></div>{connection?.status === "connected" ? <button className="text-action" onClick={() => void disconnectMusic()}>断开</button> : <button className="text-action" disabled={connectionLoading} onClick={() => void connectNetease()}>{connectionLoading ? "生成中" : "扫码连接"} <ChevronRight size={15} /></button>}</div>
+        {qrImage && (
+          <div className="netease-qr-panel">
+            {/* QR is a server-generated data URL. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={qrImage} alt="网易云音乐登录二维码" />
+            <div><strong>{connection?.status === "scanned" ? "请在手机上确认" : "使用网易云音乐扫码"}</strong><span>二维码过期后可重新生成；授权 Cookie 不会发送到浏览器。</span></div>
+          </div>
+        )}
+        {connectionError && <p className="connection-error" role="alert">{connectionError}</p>}
         <div className="setting-row"><div className="setting-icon"><Shield size={19} /></div><div><strong>图片处理</strong><span>原图只用于本次理解，默认不长期保留</span></div><span className="setting-state"><Check size={15} /> 已开启</span></div>
         <div className="setting-row danger-row"><div className="setting-icon"><Trash2 size={19} /></div><div><strong>清除演示数据</strong><span>删除当前浏览器中的历史、反馈和画像</span></div><button className="text-action danger">清除数据</button></div>
       </div>
     </section>
   );
+}
+
+function connectionDescription(connection: NeteaseConnection | null) {
+  if (!connection) return "正在读取连接状态";
+  if (connection.status === "connected") {
+    const taste = connection.taste;
+    return taste ? `已连接 · ${taste.likedCount} 首喜欢 · ${taste.recordCount} 条播放画像` : "已连接 · 正在同步音乐画像";
+  }
+  if (connection.status === "waiting") return "等待扫码";
+  if (connection.status === "scanned") return "已扫码，等待手机确认";
+  if (connection.status === "unavailable") return connection.message ?? "密码登录不可用，请使用二维码";
+  return connection.message ?? "未连接 · 使用二维码授权账号画像与播放权限";
 }

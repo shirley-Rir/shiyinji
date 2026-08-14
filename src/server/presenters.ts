@@ -58,6 +58,13 @@ export function presentTrack(track: RankedTrack) {
     reason: track.reason,
     tags: track.tags,
     score: track.score,
+    features: {
+      genres: track.features.genres,
+      lyric_density: track.features.lyricDensity,
+      energy: track.features.energy,
+      familiarity: track.features.familiarity,
+      provenance: track.features.provenance ?? null,
+    },
     playable: true,
   };
 }

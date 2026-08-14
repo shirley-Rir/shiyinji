@@ -8,6 +8,13 @@ export type TrackFeatures = {
   valence: number;
   lyricDensity: "none" | "low" | "medium" | "high";
   familiarity: number;
+  provenance?: {
+    genres: "wiki" | "search" | "inferred";
+    lyricDensity: "lyrics" | "instrumental-signal" | "inferred";
+    energy: "wiki-bpm" | "genre-heuristic";
+    familiarity: "account-history" | "anonymous";
+    confidence: number;
+  };
 };
 
 export type TrackCandidate = {

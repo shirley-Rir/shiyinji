@@ -23,6 +23,8 @@ class FakeNcmClient implements NcmClient {
   async searchSongs() { return this.songs; }
   async getSongDetails() { return { songs: this.songs, privileges: this.privileges }; }
   async getPlayback() { return this.playback; }
+  async getLyrics() { return { nolyric: true }; }
+  async getWiki() { return null; }
 }
 
 test("Netease provider retrieves domain candidates and filters by account playability", async () => {
@@ -31,7 +33,22 @@ test("Netease provider retrieves domain candidates and filters by account playab
   const candidates = await provider.retrieveCandidates({ context, profile: createDefaultProfile("test-user"), limit: 10 });
   assert.equal(candidates[0].id, "netease:101");
   assert.equal(candidates[0].features.lyricDensity, "none");
+  assert.equal(candidates[0].features.provenance?.lyricDensity, "lyrics");
+  assert.notEqual(candidates[0].features.energy, context.targetEnergy);
   assert.deepEqual(await provider.filterPlayable(candidates.map((item) => item.id)), ["netease:101"]);
+});
+
+test("Netease provider derives account familiarity before second-stage ranking", async () => {
+  const client = new FakeNcmClient();
+  const sessions = {
+    async getSession() { return { cookie: "server-only", userId: 7, source: "qr" as const, connectedAt: new Date().toISOString() }; },
+    async getTaste() { return { likedIds: new Set([101]), playCounts: new Map(), familiarArtists: new Set<string>(), preferredGenres: ["器乐"] }; },
+  };
+  const provider = new NeteaseMusicProvider(client, {}, sessions);
+  const candidates = await provider.retrieveCandidates({ context, profile: createDefaultProfile("test-user"), limit: 10 });
+  assert.equal(candidates[0].features.familiarity, 0.98);
+  assert.ok(candidates[0].tags.includes("账号常听"));
+  assert.equal(candidates[1].features.familiarity, 0.12);
 });
 
 test("Netease provider resolves full playback and rejects trial-only URLs", async () => {

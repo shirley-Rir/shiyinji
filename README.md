@@ -34,6 +34,7 @@
 - [当前完成度与实施顺序](docs/architecture/05-current-progress.md)
 - [情境语义模型选型与评测](docs/ai/model-selection.md)
 - [网易云 Enhanced API 对接研究](docs/integrations/netease-cloud-api.md)
+- [项目快速接手](QUICKSTART.md)
 - [Web MVP PRD](04-web-mvp-prd.md)
 - [技术选型与资源](05-web-mvp-tech-selection-and-resources.md)
 

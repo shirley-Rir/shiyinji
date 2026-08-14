@@ -10,5 +10,8 @@ declare namespace Cloudflare {
     NCM_API_BASE_URL?: string;
     NCM_PLAYBACK_LEVEL?: string;
     NCM_ALLOW_TRIAL?: string;
+    NCM_AUTH_MODE?: "none" | "password" | "qr";
+    NCM_PHONE?: string;
+    NCM_MD5_PASSWORD?: string;
   }
 }

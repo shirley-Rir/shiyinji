@@ -27,10 +27,25 @@ export type NcmPlayback = {
   freeTrialInfo?: unknown;
 };
 
+export type NcmLyric = {
+  nolyric?: boolean;
+  uncollected?: boolean;
+  lrc?: { lyric?: string };
+};
+
+export type NcmTasteProfile = {
+  likedIds: Set<number>;
+  playCounts: Map<number, number>;
+  familiarArtists: Set<string>;
+  preferredGenres: string[];
+};
+
 export interface NcmClient {
-  searchSongs(keywords: string, limit: number): Promise<NcmSong[]>;
-  getSongDetails(ids: number[]): Promise<{ songs: NcmSong[]; privileges: NcmPrivilege[] }>;
-  getPlayback(id: number, level: string): Promise<NcmPlayback>;
+  searchSongs(keywords: string, limit: number, cookie?: string): Promise<NcmSong[]>;
+  getSongDetails(ids: number[], cookie?: string): Promise<{ songs: NcmSong[]; privileges: NcmPrivilege[] }>;
+  getPlayback(id: number, level: string, cookie?: string): Promise<NcmPlayback>;
+  getLyrics(id: number): Promise<NcmLyric>;
+  getWiki(id: number): Promise<unknown>;
 }
 
 export class NcmApiClient implements NcmClient {
@@ -41,33 +56,118 @@ export class NcmApiClient implements NcmClient {
     private readonly maxRetries = 2,
   ) {}
 
-  async searchSongs(keywords: string, limit: number) {
-    const payload = await this.get<{ code: number; result?: { songs?: NcmSong[] } }>("/cloudsearch", { keywords, type: "1", limit: String(limit), offset: "0" });
+  async searchSongs(keywords: string, limit: number, cookie?: string) {
+    const payload = await this.call<{ code: number; result?: { songs?: NcmSong[] } }>("/cloudsearch", { keywords, type: "1", limit: String(limit), offset: "0" }, cookie);
     return payload.result?.songs ?? [];
   }
 
-  async getSongDetails(ids: number[]) {
+  async getSongDetails(ids: number[], cookie?: string) {
     if (!ids.length) return { songs: [], privileges: [] };
-    const payload = await this.get<{ code: number; songs?: NcmSong[]; privileges?: NcmPrivilege[] }>("/song/detail", { ids: ids.join(",") });
+    const payload = await this.call<{ code: number; songs?: NcmSong[]; privileges?: NcmPrivilege[] }>("/song/detail", { ids: ids.join(",") }, cookie);
     return { songs: payload.songs ?? [], privileges: payload.privileges ?? [] };
   }
 
-  async getPlayback(id: number, level: string) {
-    const payload = await this.get<{ code: number; data?: NcmPlayback[] }>("/song/url/v1", { id: String(id), level, unblock: "false", timestamp: String(Date.now()) });
+  async getPlayback(id: number, level: string, cookie?: string) {
+    const payload = await this.call<{ code: number; data?: NcmPlayback[] }>("/song/url/v1", { id: String(id), level, unblock: "false", timestamp: String(Date.now()) }, cookie);
     const playback = payload.data?.[0];
     if (!playback) throw new Error("TRACK_NOT_PLAYABLE");
     return playback;
   }
 
-  private async get<T extends { code?: number }>(pathname: string, params: Record<string, string>): Promise<T> {
+  async getLyrics(id: number) {
+    return this.call<NcmLyric & { code: number }>("/lyric", { id: String(id) });
+  }
+
+  async getWiki(id: number) {
+    const payload = await this.call<{ code: number; data?: unknown }>("/song/wiki/summary", { id: String(id) });
+    return payload.data ?? null;
+  }
+
+  async loginWithPhone(phone: string, md5Password: string) {
+    const payload = await this.call<{ code: number; cookie?: string; account?: { id?: number }; profile?: { userId?: number } }>(
+      "/login/cellphone",
+      { phone, md5_password: md5Password, timestamp: String(Date.now()) },
+      undefined,
+      "POST",
+    );
+    const userId = payload.account?.id ?? payload.profile?.userId;
+    if (!payload.cookie || !userId) throw new Error("NCM_LOGIN_INCOMPLETE");
+    return { cookie: payload.cookie, userId };
+  }
+
+  async createQr() {
+    const keyPayload = await this.call<{ code: number; data?: { unikey?: string } }>("/login/qr/key", { timestamp: String(Date.now()) });
+    const key = keyPayload.data?.unikey;
+    if (!key) throw new Error("NCM_QR_KEY_UNAVAILABLE");
+    const imagePayload = await this.call<{ code: number; data?: { qrimg?: string } }>("/login/qr/create", { key, qrimg: "true", timestamp: String(Date.now()) });
+    const qrImage = imagePayload.data?.qrimg;
+    if (!qrImage) throw new Error("NCM_QR_IMAGE_UNAVAILABLE");
+    return { key, qrImage };
+  }
+
+  async checkQr(key: string) {
+    const payload = await this.call<{ code: number; cookie?: string }>("/login/qr/check", { key, noCookie: "true", timestamp: String(Date.now()) }, undefined, "GET", [800, 801, 802, 803]);
+    return { code: payload.code, cookie: payload.cookie };
+  }
+
+  async getLoginStatus(cookie: string) {
+    const payload = await this.call<{ code?: number; data?: { account?: { id?: number }; profile?: { userId?: number } }; account?: { id?: number }; profile?: { userId?: number } }>("/login/status", { timestamp: String(Date.now()) }, cookie, "POST", [200, undefined]);
+    const userId = payload.data?.account?.id ?? payload.data?.profile?.userId ?? payload.account?.id ?? payload.profile?.userId;
+    if (!userId) throw new Error("NCM_LOGIN_STATUS_INVALID");
+    return { userId };
+  }
+
+  async getTasteProfile(userId: number, cookie: string): Promise<NcmTasteProfile> {
+    const [likes, records, playlists, styles] = await Promise.all([
+      this.safeCall<{ ids?: number[] }>("/likelist", { uid: String(userId) }, cookie),
+      this.safeCall<{ allData?: Array<{ song?: NcmSong; playCount?: number; score?: number }>; weekData?: Array<{ song?: NcmSong; playCount?: number; score?: number }> }>("/user/record", { uid: String(userId), type: "0" }, cookie),
+      this.safeCall<{ playlist?: Array<{ name?: string; tags?: string[] }> }>("/user/playlist", { uid: String(userId), limit: "50", offset: "0" }, cookie),
+      this.safeCall<unknown>("/style/preference", {}, cookie),
+    ]);
+    const recordRows = records?.allData ?? records?.weekData ?? [];
+    const playCounts = new Map<number, number>();
+    const artistScores = new Map<string, number>();
+    for (const row of recordRows) {
+      if (!row.song?.id) continue;
+      const count = Math.max(row.playCount ?? 0, Math.round((row.score ?? 0) / 10));
+      playCounts.set(row.song.id, count);
+      for (const artist of artistsOf(row.song)) artistScores.set(artist, (artistScores.get(artist) ?? 0) + count);
+    }
+    const playlistGenres = playlists?.playlist?.flatMap((playlist) => playlist.tags ?? []).filter(Boolean) ?? [];
+    const styleGenres = extractStyleNames(styles);
+    return {
+      likedIds: new Set(likes?.ids ?? []),
+      playCounts,
+      familiarArtists: new Set([...artistScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([artist]) => artist)),
+      preferredGenres: [...new Set([...styleGenres, ...playlistGenres])].slice(0, 20),
+    };
+  }
+
+  private async safeCall<T>(pathname: string, params: Record<string, string>, cookie: string): Promise<T | null> {
+    try { return await this.call<T & { code?: number }>(pathname, params, cookie, "POST", [200, undefined]); } catch { return null; }
+  }
+
+  private async call<T extends { code?: number }>(
+    pathname: string,
+    params: Record<string, string>,
+    cookie?: string,
+    method: "GET" | "POST" = cookie ? "POST" : "GET",
+    acceptedCodes: Array<number | undefined> = [200],
+  ): Promise<T> {
     const url = new URL(pathname, ensureTrailingSlash(this.baseUrl));
-    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    const requestParams = { ...params, ...(cookie ? { cookie } : {}) };
+    if (method === "GET") for (const [key, value] of Object.entries(requestParams)) url.searchParams.set(key, value);
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       try {
-        const response = await this.request(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(this.timeoutMs) });
+        const response = await this.request(url, {
+          method,
+          headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
+          body: method === "POST" ? JSON.stringify(requestParams) : undefined,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
         const payload = await response.json() as T;
-        const status = response.ok ? payload.code : response.status;
-        if (response.ok && (status === undefined || status === 200)) return payload;
+        const status = response.ok ? payload.code : (payload.code ?? response.status);
+        if (response.ok && acceptedCodes.includes(status)) return payload;
         if (![429, 502, 503, 504].includes(status ?? 0) || attempt === this.maxRetries) throw new Error(`NCM_API_ERROR:${status ?? response.status}`);
       } catch (error) {
         if (attempt === this.maxRetries || (error instanceof Error && error.message.startsWith("NCM_API_ERROR:") && !/:(429|502|503|504)$/.test(error.message))) throw error;
@@ -75,6 +175,26 @@ export class NcmApiClient implements NcmClient {
       await delay(500 * 2 ** attempt);
     }
     throw new Error("NCM_API_ERROR:RETRY_EXHAUSTED");
+  }
+}
+
+function artistsOf(song: NcmSong) {
+  return (song.ar ?? song.artists ?? []).map((artist) => artist.name).filter(Boolean);
+}
+
+function extractStyleNames(value: unknown) {
+  const names: string[] = [];
+  visit(value);
+  return [...new Set(names)].filter((name) => name.length <= 30).slice(0, 20);
+
+  function visit(node: unknown) {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!node || typeof node !== "object") return;
+    const object = node as Record<string, unknown>;
+    if (("tagId" in object || "styleId" in object) && typeof (object.tagName ?? object.name ?? object.title) === "string") {
+      names.push(String(object.tagName ?? object.name ?? object.title));
+    }
+    for (const child of Object.values(object)) visit(child);
   }
 }
 

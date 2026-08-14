@@ -10,6 +10,19 @@ export type ApiTrack = {
   reason: string;
   tags: string[];
   score: number;
+  features: {
+    genres: string[];
+    lyric_density: "none" | "low" | "medium" | "high";
+    energy: number;
+    familiarity: number;
+    provenance: {
+      genres: "wiki" | "search" | "inferred";
+      lyricDensity: "lyrics" | "instrumental-signal" | "inferred";
+      energy: "wiki-bpm" | "genre-heuristic";
+      familiarity: "account-history" | "anonymous";
+      confidence: number;
+    } | null;
+  };
 };
 
 export type ApiContext = {
@@ -35,6 +48,14 @@ export type ApiProfile = {
   };
   long_term_traits: string[];
   scene_preferences: Record<string, { targetEnergy: number; lyricTolerance: string; preferredTags: string[] }>;
+};
+
+export type NeteaseConnection = {
+  status: "disconnected" | "waiting" | "scanned" | "connected" | "unavailable";
+  source: "password" | "qr" | null;
+  connectedAt: string | null;
+  message: string | null;
+  taste: { likedCount: number; recordCount: number; preferredGenres: string[] } | null;
 };
 
 type RecommendationResponse = {
@@ -101,6 +122,26 @@ export async function updatePrivacy(personalizationEnabled: boolean) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ personalization_enabled: personalizationEnabled }),
   });
+}
+
+export async function getNeteaseConnection() {
+  return request<{ connection: NeteaseConnection }>("/api/v1/music-connections/netease");
+}
+
+export async function createNeteaseQr() {
+  return request<{ key: string; qr_image: string; connection: Pick<NeteaseConnection, "status"> }>("/api/v1/music-connections/netease", { method: "POST" });
+}
+
+export async function checkNeteaseQr(key: string) {
+  return request<{ connection: NeteaseConnection }>("/api/v1/music-connections/netease", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+}
+
+export async function disconnectNetease() {
+  await request<null>("/api/v1/music-connections/netease", { method: "DELETE" });
 }
 
 export async function getHistory() {
