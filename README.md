@@ -1,100 +1,52 @@
-# vinext-starter
+# 拾音记 Demo V1
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+拾音记是一款基于用户当下情境和账号级音乐画像进行歌曲推荐的音乐产品。用户可以输入一句话、上传一张图片，或同时提供图文；系统理解情绪、活动、环境和期望状态后，给出一首默认播放歌曲和四首备选。
 
-## Prerequisites
+当前仓库是 Web MVP 的产品雏形。界面和播放交互已可运行，推荐、画像、历史和音乐平台连接仍处于模拟或接口设计阶段。
 
-- Node.js `>=22.13.0`
+## 当前能力
 
-## Quick Start
+- 文本、图片和图文组合的情境输入界面。
+- Top 1 推荐、四首备选和队列切换。
+- 示例音频播放、暂停、切歌、进度和音量控制。
+- 喜欢、不喜欢以及推荐方向反馈。
+- 历史、画像、设置与隐私视图。
+- 桌面端和移动端响应式布局。
+- 私有在线预览和服务端渲染测试。
+
+## 尚未接通
+
+- 大模型文本和图片语义解析。
+- 真实账号、数据库和跨设备画像。
+- 网易云账号授权、歌单导入和完整曲库。
+- 真实候选召回、可播放过滤和推荐排序。
+- 播放事件、反馈事件及画像学习。
+
+## 架构文档
+
+- [总体程序架构](docs/architecture/01-system-architecture.md)
+- [推荐引擎设计](docs/architecture/02-recommendation-engine.md)
+- [API 职责与契约](docs/architecture/03-api-contracts.md)
+- [功能链路与时序](docs/architecture/04-feature-flows.md)
+- [当前完成度与实施顺序](docs/architecture/05-current-progress.md)
+- [Web MVP PRD](04-web-mvp-prd.md)
+- [技术选型与资源](05-web-mvp-tech-selection-and-resources.md)
+
+## 本地运行
+
+要求 Node.js `>=22.13.0`。
 
 ```bash
 npm install
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+验证：
 
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```bash
+npm test
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+## 技术形态
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+当前使用 React、TypeScript、vinext、Tailwind CSS 和 lucide-react，并保留 Cloudflare Worker 兼容输出。后续业务层按 `AIProvider`、`MusicProvider`、`RecommendationService` 和 `ProfileService` 拆分，避免页面直接依赖某一家模型或音乐平台。
