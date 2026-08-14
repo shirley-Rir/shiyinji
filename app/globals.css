@@ -904,6 +904,14 @@ p {
   border-top: 1px solid var(--ink);
 }
 
+.empty-data {
+  margin: 0;
+  padding: 30px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .history-row {
   min-height: 104px;
   display: grid;

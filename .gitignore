@@ -40,3 +40,4 @@ dev.stderr.log
 /.wrangler/
 /outputs/
 /work/
+*.tsbuildinfo

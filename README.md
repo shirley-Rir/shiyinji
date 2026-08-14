@@ -2,7 +2,7 @@
 
 拾音记是一款基于用户当下情境和账号级音乐画像进行歌曲推荐的音乐产品。用户可以输入一句话、上传一张图片，或同时提供图文；系统理解情绪、活动、环境和期望状态后，给出一首默认播放歌曲和四首备选。
 
-当前仓库是 Web MVP 的产品雏形。界面和播放交互已可运行，推荐、画像、历史和音乐平台连接仍处于模拟或接口设计阶段。
+当前仓库是 Web MVP 的可运行雏形。界面、业务 API、D1 数据持久化、Mock 推荐链路和播放反馈闭环已经接通；真实语义模型、音乐平台授权和曲库仍待接入。
 
 ## 当前能力
 
@@ -11,16 +11,19 @@
 - 示例音频播放、暂停、切歌、进度和音量控制。
 - 喜欢、不喜欢以及推荐方向反馈。
 - 历史、画像、设置与隐私视图。
+- 账号级画像、情境会话、推荐结果、播放事件和反馈事件持久化。
+- 情境解析、候选召回、可播放过滤、加权排序和方向重排的服务端链路。
+- `AIProvider`、`MusicProvider` 与 `Repository` 兼容接口及 Mock 实现。
 - 桌面端和移动端响应式布局。
 - 私有在线预览和服务端渲染测试。
 
 ## 尚未接通
 
 - 大模型文本和图片语义解析。
-- 真实账号、数据库和跨设备画像。
+- 生产环境账号接入和跨设备画像学习。
 - 网易云账号授权、歌单导入和完整曲库。
-- 真实候选召回、可播放过滤和推荐排序。
-- 播放事件、反馈事件及画像学习。
+- 基于真实曲库的候选召回、可播放过滤和推荐排序调权。
+- 根据播放与反馈事件自动更新长期画像。
 
 ## 架构文档
 
@@ -49,4 +52,4 @@ npm test
 
 ## 技术形态
 
-当前使用 React、TypeScript、vinext、Tailwind CSS 和 lucide-react，并保留 Cloudflare Worker 兼容输出。后续业务层按 `AIProvider`、`MusicProvider`、`RecommendationService` 和 `ProfileService` 拆分，避免页面直接依赖某一家模型或音乐平台。
+当前使用 React、TypeScript、vinext、Tailwind CSS、Drizzle ORM、Cloudflare D1 和 lucide-react，并保留 Cloudflare Worker 兼容输出。业务层已经按 `AIProvider`、`MusicProvider`、`RecommendationService` 和 `Repository` 拆分，后续可独立替换模型、音乐平台和数据库实现。

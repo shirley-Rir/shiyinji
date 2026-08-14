@@ -30,7 +30,8 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { adjustRecommendation, createContextRecommendation, getHistory, getProfile, recordPlayback, resolvePlayback, sendFeedback, updatePrivacy, type ApiContext, type ApiProfile, type ApiTrack } from "@/src/client/api";
 
 type View = "listen" | "history" | "profile" | "settings";
 
@@ -39,64 +40,12 @@ type Track = {
   title: string;
   artist: string;
   duration: string;
-  source: string;
+  durationMs: number;
+  source?: string;
   reason: string;
   tags: string[];
   cover: string;
 };
-
-const TRACKS: Track[] = [
-  {
-    id: "dawn-window",
-    title: "窗边的慢速清晨",
-    artist: "拾音记演示曲库",
-    duration: "6:13",
-    source: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-    reason: "留一点呼吸感，把疲惫慢慢放下",
-    tags: ["平静", "熟悉感", "低能量"],
-    cover: "cover-coral",
-  },
-  {
-    id: "soft-current",
-    title: "柔软的水流",
-    artist: "拾音记演示曲库",
-    duration: "5:34",
-    source: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-    reason: "节奏稳定，适合把注意力收回来",
-    tags: ["专注", "无歌词", "中低能量"],
-    cover: "cover-cyan",
-  },
-  {
-    id: "after-rain",
-    title: "雨停之后",
-    artist: "拾音记演示曲库",
-    duration: "5:02",
-    source: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
-    reason: "不急着振作，只给情绪一点亮处",
-    tags: ["舒展", "轻盈", "情绪陪伴"],
-    cover: "cover-yellow",
-  },
-  {
-    id: "road-north",
-    title: "向北的公路",
-    artist: "拾音记演示曲库",
-    duration: "5:27",
-    source: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
-    reason: "画面感更开阔，适合路上的远景",
-    tags: ["旅行", "开阔", "中能量"],
-    cover: "cover-blue",
-  },
-  {
-    id: "paper-light",
-    title: "纸页间的光",
-    artist: "拾音记演示曲库",
-    duration: "6:01",
-    source: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
-    reason: "保留轻微律动，不抢走正在做的事",
-    tags: ["工作", "稳定", "少干扰"],
-    cover: "cover-green",
-  },
-];
 
 const NAV_ITEMS: { id: View; label: string; icon: typeof Home }[] = [
   { id: "listen", label: "现在听", icon: Home },
@@ -118,6 +67,28 @@ function formatTime(value: number) {
   return `${minutes}:${seconds}`;
 }
 
+function contextLabels(context: ApiContext) {
+  return Array.from(new Set([
+    ...context.current_mood,
+    ...context.target_mood,
+    ...context.environment,
+    context.activity,
+  ].filter((value): value is string => Boolean(value)))).slice(0, 4);
+}
+
+function mapApiTracks(tracks: ApiTrack[]): Track[] {
+  return tracks.map((track) => ({
+    id: track.track_id,
+    title: track.title,
+    artist: track.artist,
+    duration: formatTime(track.duration_ms / 1000),
+    durationMs: track.duration_ms,
+    reason: track.reason,
+    tags: track.tags,
+    cover: track.cover_variant,
+  }));
+}
+
 function Cover({ variant, small = false }: { variant: string; small?: boolean }) {
   return (
     <div className={`album-cover ${variant} ${small ? "album-cover-small" : ""}`} aria-hidden="true">
@@ -134,29 +105,25 @@ export function MusicApp() {
   const [query, setQuery] = useState("刚结束一天的工作，脑子还有点乱。想慢慢安静下来，但不要太伤感。");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageName, setImageName] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [tracks, setTracks] = useState(TRACKS);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [recommendationId, setRecommendationId] = useState<string | null>(null);
+  const [context, setContext] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [liked, setLiked] = useState(false);
   const [disliked, setDisliked] = useState(false);
   const [feedback, setFeedback] = useState("更安静");
   const [personalization, setPersonalization] = useState(true);
-  const [hasRecommendation, setHasRecommendation] = useState(true);
+  const [hasRecommendation, setHasRecommendation] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const bootstrapped = useRef(false);
   const currentTrack = tracks[currentIndex];
-
-  const context = useMemo(() => {
-    const text = query.toLowerCase();
-    if (/工作|学习|专注|阅读/.test(text)) return ["专注", "低干扰", "稳定节奏"];
-    if (/旅行|路上|窗外|风景/.test(text)) return ["在路上", "开阔", "轻微律动"];
-    if (/低落|难过|疲惫|乱/.test(text)) return ["疲惫", "平静", "不要太伤感"];
-    return ["此刻", "自然过渡", "熟悉感"];
-  }, [query, hasRecommendation]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -166,7 +133,13 @@ export function MusicApp() {
     } else {
       audio.pause();
     }
-  }, [isPlaying, currentIndex]);
+  }, [isPlaying, currentIndex, currentTrack?.source]);
+
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+    void runRecommendation(query, null);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -174,29 +147,32 @@ export function MusicApp() {
     };
   }, [imageUrl]);
 
-  function orderTracks(text: string) {
-    if (/工作|学习|专注|阅读/.test(text)) return [TRACKS[1], TRACKS[4], TRACKS[0], TRACKS[2], TRACKS[3]];
-    if (/旅行|路上|窗外|风景/.test(text)) return [TRACKS[3], TRACKS[2], TRACKS[1], TRACKS[0], TRACKS[4]];
-    if (/低落|难过|疲惫|乱/.test(text)) return [TRACKS[0], TRACKS[2], TRACKS[1], TRACKS[4], TRACKS[3]];
-    return TRACKS;
-  }
-
   function submitContext(event: FormEvent) {
     event.preventDefault();
-    if (!query.trim() && !imageUrl) {
+    if (!query.trim() && !imageFile) {
       setError("写下一点感受，或放一张此刻的照片。");
       return;
     }
-    setError("");
-    setIsLoading(true);
-    setIsPlaying(false);
-    window.setTimeout(() => {
-      setTracks(orderTracks(query));
+    void runRecommendation(query, imageFile);
+  }
+
+  async function runRecommendation(text: string, image: File | null) {
+    try {
+      setError("");
+      setIsLoading(true);
+      setIsPlaying(false);
+      const result = await createContextRecommendation(text, image);
+      setTracks(mapApiTracks(result.recommendation.tracks));
+      setRecommendationId(result.recommendation.recommendation_id);
+      setContext(contextLabels(result.context.context));
       setCurrentIndex(0);
       setHasRecommendation(true);
-      setIsLoading(false);
       setProgress(0);
-    }, 1100);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "这次推荐没有接住，请稍后重试。");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   function handleImage(event: ChangeEvent<HTMLInputElement>) {
@@ -205,6 +181,7 @@ export function MusicApp() {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     setImageUrl(URL.createObjectURL(file));
     setImageName(file.name);
+    setImageFile(file);
     setError("");
   }
 
@@ -212,23 +189,39 @@ export function MusicApp() {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     setImageUrl(null);
     setImageName("");
+    setImageFile(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
-  function selectTrack(index: number, autoPlay = true) {
-    setCurrentIndex(index);
-    setProgress(0);
-    setLiked(false);
-    setDisliked(false);
-    setIsPlaying(autoPlay);
+  async function selectTrack(index: number, autoPlay = true) {
+    const selected = tracks[index];
+    if (!selected || !recommendationId) return;
+    try {
+      if (currentTrack && currentTrack.id !== selected.id) {
+        void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "skipped", positionMs: Math.round(progress * 1000) });
+      }
+      let source = selected.source;
+      if (!source) {
+        const playback = await resolvePlayback(recommendationId, selected.id);
+        source = playback.url;
+        setTracks((current) => current.map((track, trackIndex) => trackIndex === index ? { ...track, source } : track));
+      }
+      setCurrentIndex(index);
+      setProgress(0);
+      setLiked(false);
+      setDisliked(false);
+      setIsPlaying(autoPlay);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "这首歌暂时无法播放");
+    }
   }
 
   function nextTrack() {
-    selectTrack((currentIndex + 1) % tracks.length, true);
+    if (tracks.length) void selectTrack((currentIndex + 1) % tracks.length, true);
   }
 
   function previousTrack() {
-    selectTrack((currentIndex - 1 + tracks.length) % tracks.length, true);
+    if (tracks.length) void selectTrack((currentIndex - 1 + tracks.length) % tracks.length, true);
   }
 
   function seek(value: number) {
@@ -236,6 +229,39 @@ export function MusicApp() {
     if (!audio) return;
     audio.currentTime = value;
     setProgress(value);
+  }
+
+  async function handlePreference(type: "like" | "dislike") {
+    if (!recommendationId || !currentTrack) return;
+    if (type === "like") {
+      setLiked((value) => !value);
+      setDisliked(false);
+    } else {
+      setDisliked((value) => !value);
+      setLiked(false);
+    }
+    try {
+      await sendFeedback({ recommendationId, trackId: currentTrack.id, type, scope: type === "like" ? "scene_profile" : "current_context" });
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "反馈暂时没有保存");
+    }
+  }
+
+  async function handleDirection(label: string) {
+    setFeedback(label);
+    if (!recommendationId || !currentTrack) return;
+    const directionByLabel: Record<string, string> = { "更安静": "quieter", "更有劲": "more_energy", "更熟悉": "more_familiar", "更新鲜": "more_fresh" };
+    try {
+      await sendFeedback({ recommendationId, trackId: currentTrack.id, type: "direction", scope: "current_context", direction: directionByLabel[label] });
+      const adjusted = await adjustRecommendation(recommendationId, directionByLabel[label]);
+      setIsPlaying(false);
+      setTracks(mapApiTracks(adjusted.tracks));
+      setRecommendationId(adjusted.recommendation_id);
+      setCurrentIndex(0);
+      setProgress(0);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "方向反馈暂时没有保存");
+    }
   }
 
   return (
@@ -371,7 +397,9 @@ export function MusicApp() {
                         preload="metadata"
                         onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime)}
                         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
-                        onEnded={nextTrack}
+                        onPlay={() => { if (recommendationId) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "started" }); }}
+                        onPause={() => { if (recommendationId && progress > 0) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "paused", positionMs: Math.round(progress * 1000) }); }}
+                        onEnded={() => { if (recommendationId) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "completed", positionMs: currentTrack.durationMs }); nextTrack(); }}
                       />
                       <div className="progress-wrap">
                         <input
@@ -386,7 +414,7 @@ export function MusicApp() {
                       </div>
                       <div className="player-controls">
                         <button onClick={previousTrack} aria-label="上一首" title="上一首"><SkipBack size={21} fill="currentColor" /></button>
-                        <button className="main-play" onClick={() => setIsPlaying((value) => !value)} aria-label={isPlaying ? "暂停" : "播放"}>
+                        <button className="main-play" onClick={() => currentTrack.source ? setIsPlaying((value) => !value) : void selectTrack(currentIndex, true)} aria-label={isPlaying ? "暂停" : "播放"}>
                           {isPlaying ? <Pause size={25} fill="currentColor" /> : <Play size={25} fill="currentColor" />}
                         </button>
                         <button onClick={nextTrack} aria-label="下一首" title="下一首"><SkipForward size={21} fill="currentColor" /></button>
@@ -421,8 +449,8 @@ export function MusicApp() {
                   <div className="feedback-bar">
                     <div className="feedback-question">
                       <span>这一首，贴近你此刻吗？</span>
-                      <button className={liked ? "selected positive" : ""} onClick={() => { setLiked(!liked); setDisliked(false); }}><Heart size={17} fill={liked ? "currentColor" : "none"} /> 喜欢</button>
-                      <button className={disliked ? "selected negative" : ""} onClick={() => { setDisliked(!disliked); setLiked(false); }}><ThumbsDown size={17} /> 不太对</button>
+                      <button className={liked ? "selected positive" : ""} onClick={() => void handlePreference("like")}><Heart size={17} fill={liked ? "currentColor" : "none"} /> 喜欢</button>
+                      <button className={disliked ? "selected negative" : ""} onClick={() => void handlePreference("dislike")}><ThumbsDown size={17} /> 不太对</button>
                     </div>
                     <div className="direction-feedback" aria-label="调整推荐方向">
                       {[
@@ -430,7 +458,7 @@ export function MusicApp() {
                         "更有劲",
                         "更熟悉",
                         "更新鲜",
-                      ].map((item) => <button key={item} className={feedback === item ? "selected" : ""} onClick={() => setFeedback(item)}>{feedback === item && <Check size={13} />}{item}</button>)}
+                      ].map((item) => <button key={item} className={feedback === item ? "selected" : ""} onClick={() => void handleDirection(item)}>{feedback === item && <Check size={13} />}{item}</button>)}
                     </div>
                   </div>
                   <p className="audio-disclaimer">当前为界面与推荐闭环演示，音频来自开放示例源；网易云账号与完整曲库尚未接入。</p>
@@ -451,49 +479,59 @@ export function MusicApp() {
 }
 
 function HistoryView({ onReplay }: { onReplay: () => void }) {
-  const sessions = [
-    { time: "今天 22:14", text: "刚结束一天工作，想慢慢安静下来", song: "窗边的慢速清晨", tone: "疲惫 → 平静" },
-    { time: "昨天 09:36", text: "整理一份很长的材料，需要持续专注", song: "柔软的水流", tone: "分散 → 专注" },
-    { time: "周六 17:08", text: "在去海边的车上，窗外天色很好", song: "向北的公路", tone: "期待 → 开阔" },
-  ];
+  const [sessions, setSessions] = useState<Awaited<ReturnType<typeof getHistory>>["sessions"]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    getHistory().then((result) => setSessions(result.sessions)).finally(() => setLoading(false));
+  }, []);
   return (
     <section className="subpage">
       <div className="subpage-heading"><p className="eyebrow">拾音历史</p><h1>那些被音乐接住的时刻</h1><p>这里只保留结构化情境和反馈，上传的原始图片默认不会长期保存。</p></div>
       <div className="history-list">
-        {sessions.map((session, index) => (
-          <article className="history-row" key={session.time}>
+        {!loading && sessions.length === 0 && <p className="empty-data">完成一次情境推荐后，这里会出现真实记录。</p>}
+        {sessions.map((session, index) => {
+          const firstTrack = session.recommendation?.tracks[0];
+          const tone = `${session.context.current_mood[0] ?? "此刻"} → ${session.context.target_mood[0] ?? "自然过渡"}`;
+          return (
+          <article className="history-row" key={session.context_session_id}>
             <div className="history-index">0{index + 1}</div>
-            <div className="history-time"><Clock3 size={15} />{session.time}</div>
-            <div className="history-copy"><strong>{session.text}</strong><span>{session.tone}</span></div>
-            <div className="history-song"><Music2 size={17} /><span><strong>{session.song}</strong><small>拾音记演示曲库</small></span></div>
-            <button onClick={onReplay} aria-label={`重新播放${session.song}`}><Play size={16} fill="currentColor" /></button>
+            <div className="history-time"><Clock3 size={15} />{new Date(session.created_at).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+            <div className="history-copy"><strong>{session.input_text || "图片情境"}</strong><span>{tone}</span></div>
+            <div className="history-song"><Music2 size={17} /><span><strong>{firstTrack?.title ?? "等待推荐"}</strong><small>{firstTrack?.artist ?? "拾音记"}</small></span></div>
+            <button onClick={onReplay} aria-label="回到播放页"><Play size={16} fill="currentColor" /></button>
           </article>
-        ))}
+        );})}
       </div>
     </section>
   );
 }
 
 function ProfileView() {
+  const [profile, setProfile] = useState<ApiProfile | null>(null);
+  useEffect(() => { getProfile().then((result) => setProfile(result.profile)); }, []);
+  const familiarity = Math.round((profile?.explicit.familiarityBias ?? 0.5) * 100);
+  const traits = profile?.long_term_traits ?? [];
+  const preferenceTags = profile ? [...profile.explicit.languages, ...profile.explicit.likedGenres] : [];
   return (
     <section className="subpage">
       <div className="subpage-heading"><p className="eyebrow">账号级音乐画像</p><h1>你的声音偏好，正在变得具体</h1><p>显式选择和每一次反馈共同影响排序，你可以随时修正。</p></div>
       <div className="profile-grid">
         <section className="profile-band">
           <div className="profile-avatar">LY</div>
-          <div><p>当前画像</p><h2>偏爱克制、温暖的陪伴感</h2><span>基于 18 次情境播放 · 最近更新于今天</span></div>
+          <div><p>当前画像</p><h2>{traits.length ? `偏爱${traits.join("、")}的陪伴感` : "正在形成你的音乐画像"}</h2><span>画像版本 {profile?.version ?? "读取中"} · 账号级持久化</span></div>
         </section>
         <section className="preference-section">
           <div className="panel-title"><div><p>长期倾向</p><h3>熟悉与探索</h3></div><Compass size={19} /></div>
-          <div className="preference-meter"><span style={{ width: "68%" }} /></div>
-          <div className="meter-label"><span>更熟悉</span><strong>68%</strong><span>更新鲜</span></div>
-          <div className="preference-tags"><span>华语</span><span>独立流行</span><span>轻电子</span><span>器乐</span><button>+ 修正偏好</button></div>
+          <div className="preference-meter"><span style={{ width: `${familiarity}%` }} /></div>
+          <div className="meter-label"><span>更熟悉</span><strong>{familiarity}%</strong><span>更新鲜</span></div>
+          <div className="preference-tags">{preferenceTags.map((tag) => <span key={tag}>{tag}</span>)}<button>+ 修正偏好</button></div>
         </section>
         <section className="scene-learning">
           <div className="panel-title"><div><p>按场景学习</p><h3>你在不同状态下的选择</h3></div><SlidersHorizontal size={19} /></div>
-          <div className="scene-row"><span>工作 / 学习</span><div><i style={{ width: "82%" }} /></div><strong>稳定、少歌词</strong></div>
-          <div className="scene-row"><span>情绪陪伴</span><div><i style={{ width: "64%" }} /></div><strong>柔和、不煽情</strong></div>
-          <div className="scene-row"><span>旅行途中</span><div><i style={{ width: "73%" }} /></div><strong>开阔、有画面</strong></div>
+          {[["focus", "工作 / 学习"], ["emotional", "情绪陪伴"], ["travel", "旅行途中"]].map(([key, label]) => {
+            const scene = profile?.scene_preferences[key];
+            return <div className="scene-row" key={key}><span>{label}</span><div><i style={{ width: `${scene?.targetEnergy ?? 0}%` }} /></div><strong>{scene?.preferredTags.join("、") ?? "等待数据"}</strong></div>;
+          })}
         </section>
       </div>
     </section>
@@ -501,11 +539,22 @@ function ProfileView() {
 }
 
 function SettingsView({ personalization, setPersonalization }: { personalization: boolean; setPersonalization: (value: boolean) => void }) {
+  useEffect(() => { getProfile().then((result) => setPersonalization(result.profile.personalization_enabled)); }, [setPersonalization]);
+  async function togglePersonalization() {
+    const next = !personalization;
+    setPersonalization(next);
+    try {
+      const result = await updatePrivacy(next);
+      setPersonalization(result.profile.personalization_enabled);
+    } catch {
+      setPersonalization(!next);
+    }
+  }
   return (
     <section className="subpage settings-page">
-      <div className="subpage-heading"><p className="eyebrow">设置与隐私</p><h1>你的数据，由你决定</h1><p>演示版数据仅保存在当前浏览器，真实账号与第三方音乐服务尚未连接。</p></div>
+      <div className="subpage-heading"><p className="eyebrow">设置与隐私</p><h1>你的数据，由你决定</h1><p>画像、情境和反馈现已绑定当前账号；第三方音乐服务仍未连接。</p></div>
       <div className="settings-list">
-        <div className="setting-row"><div className="setting-icon"><Sparkles size={19} /></div><div><strong>个性化学习</strong><span>用播放、跳过和反馈改进跨会话推荐</span></div><button className={`toggle ${personalization ? "is-on" : ""}`} onClick={() => setPersonalization(!personalization)} aria-label="切换个性化学习"><span /></button></div>
+        <div className="setting-row"><div className="setting-icon"><Sparkles size={19} /></div><div><strong>个性化学习</strong><span>用播放、跳过和反馈改进跨会话推荐</span></div><button className={`toggle ${personalization ? "is-on" : ""}`} onClick={() => void togglePersonalization()} aria-label="切换个性化学习"><span /></button></div>
         <div className="setting-row"><div className="setting-icon"><Unplug size={19} /></div><div><strong>网易云音乐</strong><span>尚未连接 · 后续仅使用扫码或会话授权</span></div><button className="text-action">准备接入 <ChevronRight size={15} /></button></div>
         <div className="setting-row"><div className="setting-icon"><Shield size={19} /></div><div><strong>图片处理</strong><span>原图只用于本次理解，默认不长期保留</span></div><span className="setting-state"><Check size={15} /> 已开启</span></div>
         <div className="setting-row danger-row"><div className="setting-icon"><Trash2 size={19} /></div><div><strong>清除演示数据</strong><span>删除当前浏览器中的历史、反馈和画像</span></div><button className="text-action danger">清除数据</button></div>
