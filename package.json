@@ -14,7 +14,8 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "eval:context": "tsx scripts/evaluate-context.ts",
-    "eval:context:rescore": "tsx scripts/rescore-context-report.ts"
+    "eval:context:rescore": "tsx scripts/rescore-context-report.ts",
+    "smoke:recommendation": "tsx scripts/smoke-recommendation.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

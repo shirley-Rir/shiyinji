@@ -1,4 +1,5 @@
-import type { PlaybackHandle, TrackCandidate } from "@/src/domain";
+import { createProfileSummary, type DraftTrackResolution, type LibraryTrackEvidence, type PlaybackHandle, type TrackCandidate, type TrackLyrics, type TrackTasteFeatures, type UserProfile } from "@/src/domain";
+import { buildAccountMusicProfile } from "@/src/services/music-profile-builder";
 import type { CandidateQuery, MusicProvider } from "./types";
 
 const MOCK_TRACKS: TrackCandidate[] = [
@@ -70,6 +71,46 @@ export class MockMusicProvider implements MusicProvider {
     return MOCK_TRACKS.slice(0, query.limit);
   }
 
+  async getProfileSummary(profile: UserProfile) {
+    return createProfileSummary(profile);
+  }
+
+  async searchDirectTrack(input: Parameters<NonNullable<MusicProvider["searchDirectTrack"]>>[0]) {
+    return MOCK_TRACKS
+      .filter((track) => normalize(track.title) === normalize(input.request.title)
+        && (!input.request.artist || normalize(track.artist).includes(normalize(input.request.artist))))
+      .slice(0, input.limit ?? 1)
+      .map((track) => ({ ...track, retrieval: { source: "direct_request" as const, fitReason: "按点歌请求精准匹配", matchScore: 1 } }));
+  }
+
+  async syncAccountMusicProfile(profile: UserProfile) {
+    const libraryTracks: LibraryTrackEvidence[] = MOCK_TRACKS.map((track, index) => ({
+      provider: "mock", providerTrackId: track.providerTrackId, title: track.title, artist: track.artist, album: null,
+      durationMs: track.durationMs, sources: index < 2 ? ["liked"] : ["playlist"], playlistIds: ["mock-playlist"],
+      playlistContexts: track.features.activities.length ? track.features.activities : ["日常收藏"], evidenceWeight: index < 2 ? 1 : 0.75,
+    }));
+    const trackFeatures: TrackTasteFeatures[] = MOCK_TRACKS.map((track) => ({
+      provider: "mock", providerTrackId: track.providerTrackId, genres: track.features.genres, languages: track.features.languages,
+      energy: track.features.energy, valence: track.features.valence, lyricDensity: track.features.lyricDensity,
+      lyricThemes: track.features.moods, narrativeStrength: track.features.lyricDensity === "none" ? 0 : 0.5,
+      instruments: track.features.lyricDensity === "none" ? ["合成器"] : [], playlistContexts: track.features.activities,
+      provenance: { genres: "metadata", languages: "metadata", energy: "inferred", lyricDensity: "inferred", lyricThemes: "inferred", instruments: "inferred" },
+      confidence: 0.75,
+    }));
+    return { libraryTracks, trackFeatures, profile: buildAccountMusicProfile({ userId: profile.userId, provider: "mock", playlistCount: 1, libraryTracks, trackFeatures }) };
+  }
+
+  async searchAndMatchDraftTracks(input: Parameters<NonNullable<MusicProvider["searchAndMatchDraftTracks"]>>[0]): Promise<DraftTrackResolution[]> {
+    const used = new Set<string>();
+    return input.drafts.map((draft) => {
+      const track = MOCK_TRACKS.find((candidate) => normalize(candidate.title) === normalize(draft.title) && (!draft.artist || normalize(candidate.artist) === normalize(draft.artist)));
+      if (!track) return { draft, status: "not_found", matchScore: null };
+      if (used.has(track.id)) return { draft, status: "duplicate", matchScore: 1 };
+      used.add(track.id);
+      return { draft, status: "matched", matchScore: 1, track: { ...track, retrieval: { source: "draft", fitReason: draft.fitReason, matchScore: 1 } } };
+    });
+  }
+
   async filterPlayable(trackIds: string[]): Promise<string[]> {
     return trackIds.filter((id) => id in AUDIO_BY_TRACK);
   }
@@ -86,4 +127,23 @@ export class MockMusicProvider implements MusicProvider {
       expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     };
   }
+
+  async getLyrics(trackId: string): Promise<TrackLyrics> {
+    const track = MOCK_TRACKS.find((candidate) => candidate.id === trackId);
+    if (!track) return { trackId, synced: false, lines: [] };
+    return {
+      trackId,
+      synced: true,
+      lines: [
+        { timeMs: 0, text: track.title },
+        { timeMs: 8_000, text: "这里展示与播放时间同步的歌词" },
+        { timeMs: 16_000, text: "当前是演示曲库的占位文本" },
+        { timeMs: 24_000, text: "连接网易云后会读取歌曲原有歌词" },
+      ],
+    };
+  }
+}
+
+function normalize(value: string) {
+  return value.toLocaleLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
 }

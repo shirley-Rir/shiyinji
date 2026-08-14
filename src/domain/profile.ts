@@ -21,6 +21,7 @@ export type UserProfile = {
   longTermTraits: string[];
   scenePreferences: Record<string, ScenePreference>;
   negativeTrackIds: string[];
+  musicProfile: AccountMusicProfile | null;
 };
 
 export const DEFAULT_EXPLICIT_PREFERENCES: ExplicitPreferences = {
@@ -45,5 +46,7 @@ export function createDefaultProfile(userId: string): UserProfile {
       travel: { targetEnergy: 58, lyricTolerance: "medium", preferredTags: ["开阔", "有画面"] },
     },
     negativeTrackIds: [],
+    musicProfile: null,
   };
 }
+import type { AccountMusicProfile } from "./music-profile";

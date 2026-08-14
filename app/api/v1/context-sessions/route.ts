@@ -3,6 +3,7 @@ import { repository } from "@/src/repositories";
 import { apiError, errorResponse } from "@/src/server/http";
 import { requireApiUser } from "@/src/server/identity";
 import { presentContext } from "@/src/server/presenters";
+import { createDirectPlayInterpretation } from "@/src/services/request-intent";
 
 export async function POST(request: Request) {
   try {
@@ -18,7 +19,8 @@ export async function POST(request: Request) {
 
     const imageMetadata = image ? { name: image.name, type: image.type, size: image.size } : null;
     const modelImage = image ? { ...imageMetadata!, dataUrl: await fileToDataUrl(image) } : undefined;
-    const interpretation = await aiProvider.interpretContext({ text, image: modelImage, timezone: String(form.get("timezone") ?? "") || undefined });
+    const contextInput = { text, image: modelImage, timezone: String(form.get("timezone") ?? "") || undefined };
+    const interpretation = createDirectPlayInterpretation(contextInput) ?? await aiProvider.interpretContext(contextInput);
     const session = await repository.createContextSession(user.id, text, imageMetadata, interpretation);
     return Response.json({ context_session_id: session.id, context: presentContext(session.context), clarification: session.clarification, provider: interpretation.provider }, { status: 201 });
   } catch (error) { return apiError(error); }

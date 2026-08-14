@@ -25,7 +25,7 @@
 
 ```powershell
 cd D:\Desk\拾音记\ncm-api-enhanced-main
-npm start
+env:PORT="4000"; node app.js # Windows PowerShell
 ```
 
 确认音乐服务位于 `http://localhost:4000`，再启动 Web：

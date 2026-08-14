@@ -2,6 +2,12 @@ export type ContextSource = "text" | "image" | "text_image";
 export type SocialState = "alone" | "with_others" | "unknown";
 export type LyricTolerance = "none" | "low" | "medium" | "high";
 export type SafetyRisk = "none" | "watch" | "high";
+export type MusicRequestIntent = "recommendation" | "direct_play";
+export type DirectPlayRequest = {
+  title: string;
+  artist: string | null;
+  versionHint: "studio" | "live" | "acoustic" | "remix" | "any";
+};
 
 export type ContextInput = {
   text: string;
@@ -16,6 +22,8 @@ export type ContextInput = {
 
 export type StructuredContext = {
   source: ContextSource;
+  requestIntent: MusicRequestIntent;
+  directPlay: DirectPlayRequest | null;
   currentMood: string[];
   targetMood: string[];
   activity: string | null;

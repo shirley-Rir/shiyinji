@@ -34,10 +34,11 @@
 | `GET /api/v1/music-connections/netease/login-sessions/:id` | 轮询扫码结果 | 登录会话 ID | 等待、成功、过期 | 成功时加密保存凭据 | P0 |
 | `POST /api/v1/music-connections/netease/import` | 导入用户歌单和收藏 | 导入范围 | 任务状态、数量摘要 | 更新曲库来源和画像种子 | P0 |
 | `DELETE /api/v1/music-connections/netease` | 解绑音乐账号 | 当前会话 | 删除结果 | 删除本地第三方凭据 | P0 |
-| `POST /api/v1/context-sessions` | 解析文本、图片或图文情境 | `multipart/form-data` | `StructuredContext`、置信度、会话 ID | 保存结构化情境，原图短暂处理 | P0 |
-| `POST /api/v1/recommendations` | 生成 Top 1、四首备选和队列 | 情境会话 ID、模式 | 推荐列表、理由、推荐 ID | 保存候选、分数和画像版本 | P0 |
+| `POST /api/v1/context-sessions` | 区分点歌/推荐意图并解析文本、图片或图文情境 | `multipart/form-data` | `StructuredContext`、意图、置信度、会话 ID | 保存结构化情境，原图短暂处理 | P0 |
+| `POST /api/v1/recommendations` | 点歌时精准返回一首；推荐时生成 Top 1 与四首备选 | 情境会话 ID、模式 | 歌曲列表、理由、推荐 ID | 保存候选、分数和画像版本 | P0 |
 | `POST /api/v1/recommendations/:id/adjust` | 按方向重新排序 | 更安静、更有劲等 | 更新后的推荐列表 | 保存方向反馈 | P0 |
 | `POST /api/v1/playback/resolve` | 获取当前用户的播放句柄 | Track ID、推荐 ID | 临时播放地址或播放凭证 | 记录解析结果，不缓存音频 | P0 |
+| `GET /api/v1/tracks/:trackId/lyrics` | 获取歌曲歌词时间轴 | Track ID | 同步状态、原文与翻译行 | 不持久化歌词正文 | P0 |
 | `POST /api/v1/events/playback` | 记录播放事件 | 播放、暂停、跳过、播完、失败 | 接收确认 | 写事件表，触发画像任务 | P0 |
 | `POST /api/v1/feedback` | 记录喜欢或不喜欢 | 推荐位置、歌曲、作用范围 | 反馈 ID、影响说明 | 写反馈并触发画像任务 | P0 |
 | `POST /api/v1/feedback/:id/undo` | 撤销最近反馈 | 反馈 ID | 撤销结果、画像版本 | 写补偿事件 | P0 |
@@ -66,6 +67,8 @@
   "context_session_id": "ctx_01",
   "context": {
     "source": "text_image",
+    "request_intent": "recommendation",
+    "direct_play": null,
     "current_mood": ["疲惫", "混乱"],
     "target_mood": ["平静"],
     "activity": "下班后休息",
@@ -84,6 +87,8 @@
 ```
 
 如果置信度不足，仍返回会话 ID，同时返回一个 `clarification`，前端只展示一个追问。
+
+明确点歌会在调用大模型前被识别为 `direct_play`，并保存 `{ title, artist, version_hint }`。后续只进行歌曲搜索与可播放校验，不进入画像推荐；未指定歌手时接受任意歌手的标题匹配版本，指定歌手后执行严格歌手实体校验。
 
 ### 3.2 创建推荐
 

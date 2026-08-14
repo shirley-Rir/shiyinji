@@ -25,7 +25,15 @@ export type ApiTrack = {
   };
 };
 
+export type ApiTrackLyrics = {
+  track_id: string;
+  synced: boolean;
+  lines: Array<{ time_ms: number | null; text: string; translation: string | null }>;
+};
+
 export type ApiContext = {
+  request_intent: "recommendation" | "direct_play";
+  direct_play: { title: string; artist: string | null; version_hint: "studio" | "live" | "acoustic" | "remix" | "any" } | null;
   current_mood: string[];
   target_mood: string[];
   activity: string | null;
@@ -48,6 +56,23 @@ export type ApiProfile = {
   };
   long_term_traits: string[];
   scene_preferences: Record<string, { targetEnergy: number; lyricTolerance: string; preferredTags: string[] }>;
+  music_profile: ApiMusicProfile | null;
+};
+
+export type ApiMusicProfile = {
+  provider: string;
+  version: number;
+  analyzed_at: string;
+  confidence: number;
+  source_coverage: { playlistCount: number; libraryTrackCount: number; analyzedTrackCount: number; lyricTrackCount: number; historyTrackCount: number };
+  genres: Array<{ value: string; weight: number; confidence: number; evidenceCount: number }>;
+  languages: Array<{ value: string; weight: number; confidence: number; evidenceCount: number }>;
+  artists: Array<{ value: string; weight: number; confidence: number; evidenceCount: number }>;
+  lyric_themes: Array<{ value: string; weight: number; confidence: number; evidenceCount: number }>;
+  preferred_energy: { center: number; range: [number, number]; confidence: number };
+  lyric_preference: { instrumentalRatio: number; preferredDensity: "none" | "low" | "medium" | "high"; narrativeStrength: number };
+  diversity: { artistDiversity: number; genreDiversity: number; noveltyTolerance: number };
+  preference_clusters: Array<{ id: string; label: string; weight: number; genres: string[]; moods: string[]; energyCenter: number; lyricDensity: "none" | "low" | "medium" | "high"; signals: string[] }>;
 };
 
 export type NeteaseConnection = {
@@ -64,6 +89,16 @@ type RecommendationResponse = {
   profile_version: number;
   generated_at: string;
   tracks: ApiTrack[];
+  strategy?: {
+    model_version: string;
+    discovery_mode: "familiar" | "balanced" | "explore" | "fallback" | "direct";
+    draft_count: number;
+    matched_draft_count: number;
+    fallback_candidate_count: number;
+    planner_fallback_reason: "unavailable" | "invalid_response" | "profile_unavailable" | null;
+    failure_counts: Record<string, number>;
+    draft_resolutions: Array<{ title: string; artist?: string; status: string; matchScore: number | null }>;
+  };
 };
 
 export async function createContextRecommendation(text: string, image?: File | null) {
@@ -75,7 +110,7 @@ export async function createContextRecommendation(text: string, image?: File | n
   const recommendation = await request<RecommendationResponse>("/api/v1/recommendations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ context_session_id: context.context_session_id, mode: "autoplay", count: 5 }),
+    body: JSON.stringify({ context_session_id: context.context_session_id, mode: "autoplay", discovery_mode: "auto", count: 5 }),
   });
   return { context, recommendation };
 }
@@ -86,6 +121,10 @@ export async function resolvePlayback(recommendationId: string, trackId: string)
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ recommendation_id: recommendationId, track_id: trackId }),
   });
+}
+
+export async function getTrackLyrics(trackId: string) {
+  return request<ApiTrackLyrics>(`/api/v1/tracks/${encodeURIComponent(trackId)}/lyrics`);
 }
 
 export async function adjustRecommendation(recommendationId: string, direction: string) {
@@ -114,6 +153,18 @@ export async function sendFeedback(input: { recommendationId: string; trackId: s
 
 export async function getProfile() {
   return request<{ profile: ApiProfile }>("/api/v1/profile");
+}
+
+export async function updateProfile(explicit: ApiProfile["explicit"]) {
+  return request<{ profile: ApiProfile }>("/api/v1/profile", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ explicit }),
+  });
+}
+
+export async function syncMusicProfile() {
+  return request<{ music_profile: ApiMusicProfile }>("/api/v1/profile/music/sync", { method: "POST" });
 }
 
 export async function updatePrivacy(personalizationEnabled: boolean) {

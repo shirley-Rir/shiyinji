@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { initializeDatabase } from "@/db/initialize";
-import { contextSessions, feedbackEvents, playbackEvents, recommendationItems, recommendations, tracks, userProfiles, users } from "@/db/schema";
-import { createDefaultProfile, type ContextInterpretation, type RankedTrack, type ScoreBreakdown, type StructuredContext, type TrackCandidate, type UserProfile } from "@/src/domain";
+import { accountMusicProfiles, contextSessions, feedbackEvents, playbackEvents, recommendationItems, recommendations, trackTasteFeatures, tracks, userLibraryTracks, userProfiles, users } from "@/db/schema";
+import { createDefaultProfile, type AccountMusicProfile, type AccountMusicProfileSyncSnapshot, type ContextInterpretation, type RankedTrack, type ScoreBreakdown, type StructuredContext, type TrackCandidate, type TrackTasteFeatures, type UserProfile } from "@/src/domain";
 import type { AppUser, ShiyinjiRepository, StoredContextSession, StoredRecommendation } from "./types";
 
 function json<T>(value: T): string { return JSON.stringify(value); }
@@ -23,14 +23,14 @@ export class D1ShiyinjiRepository implements ShiyinjiRepository {
       await db.insert(userProfiles).values({ userId: user.id, version: profile.version, personalizationEnabled: profile.personalizationEnabled, explicitPreferences: json(profile.explicit), longTermTraits: json(profile.longTermTraits), scenePreferences: json(profile.scenePreferences), negativeTrackIds: json(profile.negativeTrackIds) });
       return profile;
     }
-    return mapProfile(existing);
+    return mapProfile(existing, await this.getAccountMusicProfile(user.id));
   }
 
   async getProfile(userId: string): Promise<UserProfile> {
     const db = await this.db();
     const row = await db.select().from(userProfiles).where(eq(userProfiles.userId, userId)).get();
     if (!row) throw new Error("PROFILE_NOT_FOUND");
-    return mapProfile(row);
+    return mapProfile(row, await this.getAccountMusicProfile(userId));
   }
 
   async updateProfile(userId: string, patch: Partial<Pick<UserProfile, "explicit" | "personalizationEnabled">>): Promise<UserProfile> {
@@ -44,6 +44,77 @@ export class D1ShiyinjiRepository implements ShiyinjiRepository {
     const db = await this.db();
     await db.update(userProfiles).set({ version: next.version, personalizationEnabled: next.personalizationEnabled, explicitPreferences: json(next.explicit), updatedAt: new Date().toISOString() }).where(eq(userProfiles.userId, userId));
     return next;
+  }
+
+  async getAccountMusicProfile(userId: string): Promise<AccountMusicProfile | null> {
+    const db = await this.db();
+    const row = await db.select().from(accountMusicProfiles).where(eq(accountMusicProfiles.userId, userId)).orderBy(desc(accountMusicProfiles.version)).get();
+    return row ? parse<AccountMusicProfile>(row.profile) : null;
+  }
+
+  async saveAccountMusicProfile(userId: string, snapshot: AccountMusicProfileSyncSnapshot): Promise<AccountMusicProfile> {
+    const current = await this.getProfile(userId);
+    const previous = current.musicProfile;
+    const profile: AccountMusicProfile = {
+      ...snapshot.profile,
+      userId,
+      version: (previous?.version ?? 0) + 1,
+      analyzedAt: new Date().toISOString(),
+    };
+    const db = await this.db();
+    await db.insert(accountMusicProfiles).values({
+      id: `amp_${crypto.randomUUID()}`,
+      userId,
+      provider: profile.provider,
+      version: profile.version,
+      profile: json(profile),
+    });
+    const syncedAt = profile.analyzedAt;
+    for (const track of snapshot.libraryTracks) {
+      const values = {
+        id: `${userId}:${track.provider}:${track.providerTrackId}`,
+        userId,
+        provider: track.provider,
+        providerTrackId: track.providerTrackId,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        durationMs: track.durationMs,
+        sources: json(track.sources),
+        playlistIds: json(track.playlistIds),
+        playlistContexts: json(track.playlistContexts),
+        evidenceWeight: track.evidenceWeight,
+        syncedAt,
+      };
+      await db.insert(userLibraryTracks).values(values).onConflictDoUpdate({
+        target: userLibraryTracks.id,
+        set: { title: values.title, artist: values.artist, album: values.album, durationMs: values.durationMs, sources: values.sources, playlistIds: values.playlistIds, playlistContexts: values.playlistContexts, evidenceWeight: values.evidenceWeight, syncedAt },
+      });
+    }
+    for (const feature of snapshot.trackFeatures) {
+      const cacheableFeature = { ...feature, playlistContexts: [] };
+      const values = {
+        id: `${feature.provider}:${feature.providerTrackId}`,
+        provider: feature.provider,
+        providerTrackId: feature.providerTrackId,
+        features: json(cacheableFeature),
+        confidence: feature.confidence,
+        updatedAt: syncedAt,
+      };
+      await db.insert(trackTasteFeatures).values(values).onConflictDoUpdate({
+        target: trackTasteFeatures.id,
+        set: { features: values.features, confidence: values.confidence, updatedAt: syncedAt },
+      });
+    }
+    await db.update(userProfiles).set({ version: current.version + 1, updatedAt: syncedAt }).where(eq(userProfiles.userId, userId));
+    return profile;
+  }
+
+  async getTrackTasteFeatures(provider: string, providerTrackIds: string[]): Promise<TrackTasteFeatures[]> {
+    if (!providerTrackIds.length) return [];
+    const db = await this.db();
+    const rows = await db.select().from(trackTasteFeatures).where(and(eq(trackTasteFeatures.provider, provider), inArray(trackTasteFeatures.providerTrackId, providerTrackIds))).all();
+    return rows.map((row) => parse<TrackTasteFeatures>(row.features));
   }
 
   async createContextSession(userId: string, inputText: string, imageMetadata: object | null, interpretation: ContextInterpretation): Promise<StoredContextSession> {
@@ -125,12 +196,14 @@ export class D1ShiyinjiRepository implements ShiyinjiRepository {
   }
 }
 
-function mapProfile(row: typeof userProfiles.$inferSelect): UserProfile {
-  return { userId: row.userId, version: row.version, personalizationEnabled: row.personalizationEnabled, explicit: parse(row.explicitPreferences), longTermTraits: parse(row.longTermTraits), scenePreferences: parse(row.scenePreferences), negativeTrackIds: parse(row.negativeTrackIds) };
+function mapProfile(row: typeof userProfiles.$inferSelect, musicProfile: AccountMusicProfile | null): UserProfile {
+  return { userId: row.userId, version: row.version, personalizationEnabled: row.personalizationEnabled, explicit: parse(row.explicitPreferences), longTermTraits: parse(row.longTermTraits), scenePreferences: parse(row.scenePreferences), negativeTrackIds: parse(row.negativeTrackIds), musicProfile };
 }
 
 function mapContext(row: typeof contextSessions.$inferSelect): StoredContextSession {
-  return { id: row.id, userId: row.userId, inputText: row.inputText, context: parse<StructuredContext>(row.structuredContext), confidence: row.confidence, clarification: row.clarification, createdAt: row.createdAt };
+  const stored = parse<StructuredContext>(row.structuredContext);
+  const context = { ...stored, requestIntent: stored.requestIntent ?? "recommendation" as const, directPlay: stored.directPlay ?? null };
+  return { id: row.id, userId: row.userId, inputText: row.inputText, context, confidence: row.confidence, clarification: row.clarification, createdAt: row.createdAt };
 }
 
 function mapTrack(row: typeof tracks.$inferSelect): TrackCandidate {

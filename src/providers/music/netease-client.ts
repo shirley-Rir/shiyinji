@@ -8,6 +8,32 @@ export type NcmSong = {
   artists?: Array<{ name: string }>;
   al?: { name?: string; picUrl?: string };
   album?: { name?: string; picUrl?: string };
+  publishTime?: number;
+};
+
+export type NcmPlaylist = {
+  id: number;
+  name: string;
+  tags: string[];
+  subscribed: boolean;
+  trackCount: number;
+};
+
+export type NcmAccountLibraryTrack = {
+  song: NcmSong;
+  sources: Array<"liked" | "playlist" | "history">;
+  playlistIds: number[];
+  playlistContexts: string[];
+  playlistWeight: number;
+  playCount: number;
+};
+
+export type NcmAccountLibrary = {
+  playlists: NcmPlaylist[];
+  tracks: NcmAccountLibraryTrack[];
+  likedIds: Set<number>;
+  playCounts: Map<number, number>;
+  preferredGenres: string[];
 };
 
 export type NcmPrivilege = {
@@ -31,13 +57,16 @@ export type NcmLyric = {
   nolyric?: boolean;
   uncollected?: boolean;
   lrc?: { lyric?: string };
+  tlyric?: { lyric?: string };
 };
 
 export type NcmTasteProfile = {
   likedIds: Set<number>;
+  libraryIds?: Set<number>;
   playCounts: Map<number, number>;
   familiarArtists: Set<string>;
   preferredGenres: string[];
+  representativeTracks?: Array<{ id: number; title: string; artist: string; source: "liked" | "playlist" | "history" }>;
 };
 
 export interface NcmClient {
@@ -46,6 +75,7 @@ export interface NcmClient {
   getPlayback(id: number, level: string, cookie?: string): Promise<NcmPlayback>;
   getLyrics(id: number): Promise<NcmLyric>;
   getWiki(id: number): Promise<unknown>;
+  getAccountLibrary?(userId: number, cookie: string): Promise<NcmAccountLibrary>;
 }
 
 export class NcmApiClient implements NcmClient {
@@ -75,11 +105,11 @@ export class NcmApiClient implements NcmClient {
   }
 
   async getLyrics(id: number) {
-    return this.call<NcmLyric & { code: number }>("/lyric", { id: String(id) });
+    return this.call<NcmLyric & { code: number }>("/lyric", { id: String(id) }, undefined, "GET", [200], 0, 3_000);
   }
 
   async getWiki(id: number) {
-    const payload = await this.call<{ code: number; data?: unknown }>("/song/wiki/summary", { id: String(id) });
+    const payload = await this.call<{ code: number; data?: unknown }>("/song/wiki/summary", { id: String(id) }, undefined, "GET", [200], 0, 3_000);
     return payload.data ?? null;
   }
 
@@ -118,29 +148,109 @@ export class NcmApiClient implements NcmClient {
   }
 
   async getTasteProfile(userId: number, cookie: string): Promise<NcmTasteProfile> {
+    const library = await this.getAccountLibrary(userId, cookie);
+    const artistScores = new Map<string, number>();
+    for (const track of library.tracks) {
+      const score = Math.max(1, track.playCount, track.sources.includes("liked") ? 8 : 0, track.sources.includes("playlist") ? 4 : 0);
+      for (const artist of artistsOf(track.song)) artistScores.set(artist, (artistScores.get(artist) ?? 0) + score);
+    }
+    const representativeTracks = [...library.tracks]
+      .sort((a, b) => tasteEvidenceWeight(b) - tasteEvidenceWeight(a))
+      .slice(0, 40)
+      .map((track) => ({ id: track.song.id, title: track.song.name, artist: artistsOf(track.song).join(" / ") || "未知艺人", source: primarySource(track.sources) }));
+    return {
+      likedIds: library.likedIds,
+      libraryIds: new Set(library.tracks.filter((track) => track.sources.includes("liked") || track.sources.includes("playlist")).map((track) => track.song.id)),
+      playCounts: library.playCounts,
+      familiarArtists: new Set([...artistScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([artist]) => artist)),
+      preferredGenres: library.preferredGenres,
+      representativeTracks,
+    };
+  }
+
+  async getAccountLibrary(userId: number, cookie: string): Promise<NcmAccountLibrary> {
     const [likes, records, playlists, styles] = await Promise.all([
       this.safeCall<{ ids?: number[] }>("/likelist", { uid: String(userId) }, cookie),
       this.safeCall<{ allData?: Array<{ song?: NcmSong; playCount?: number; score?: number }>; weekData?: Array<{ song?: NcmSong; playCount?: number; score?: number }> }>("/user/record", { uid: String(userId), type: "0" }, cookie),
-      this.safeCall<{ playlist?: Array<{ name?: string; tags?: string[] }> }>("/user/playlist", { uid: String(userId), limit: "50", offset: "0" }, cookie),
+      this.getUserPlaylists(userId, cookie),
       this.safeCall<unknown>("/style/preference", {}, cookie),
     ]);
+    const likedIds = new Set(likes?.ids ?? []);
     const recordRows = records?.allData ?? records?.weekData ?? [];
+    const playlistSongs = await mapWithConcurrency(playlists.slice(0, 30), 3, async (playlist) => ({
+      playlist,
+      songs: await this.getPlaylistSongs(playlist, cookie),
+    }));
+    const tracks = new Map<number, MutableLibraryTrack>();
+    const ensureTrack = (song: NcmSong) => {
+      const existing = tracks.get(song.id);
+      if (existing) return existing;
+      const created: MutableLibraryTrack = { song, sources: new Set(), playlistIds: new Set(), playlistContexts: new Set(), playlistWeight: 0, playCount: 0 };
+      tracks.set(song.id, created);
+      return created;
+    };
+    for (const { playlist, songs } of playlistSongs) {
+      const playlistWeight = playlist.subscribed ? 0.5 : 0.75;
+      for (const song of songs) {
+        const track = ensureTrack(song);
+        track.sources.add("playlist");
+        track.playlistIds.add(playlist.id);
+        track.playlistWeight = Math.max(track.playlistWeight, playlistWeight);
+        for (const context of [playlist.name, ...playlist.tags]) if (context) track.playlistContexts.add(context);
+      }
+    }
+    const missingLiked = [...likedIds].filter((id) => !tracks.has(id)).slice(0, 1000);
+    for (const ids of chunks(missingLiked, 200)) {
+      const details = await this.getSongDetails(ids, cookie).catch(() => ({ songs: [], privileges: [] }));
+      for (const song of details.songs) ensureTrack(song);
+    }
+    for (const id of likedIds) {
+      const track = tracks.get(id);
+      if (track) track.sources.add("liked");
+    }
     const playCounts = new Map<number, number>();
-    const artistScores = new Map<string, number>();
     for (const row of recordRows) {
       if (!row.song?.id) continue;
       const count = Math.max(row.playCount ?? 0, Math.round((row.score ?? 0) / 10));
       playCounts.set(row.song.id, count);
-      for (const artist of artistsOf(row.song)) artistScores.set(artist, (artistScores.get(artist) ?? 0) + count);
+      const track = ensureTrack(row.song);
+      track.sources.add("history");
+      track.playCount = count;
     }
-    const playlistGenres = playlists?.playlist?.flatMap((playlist) => playlist.tags ?? []).filter(Boolean) ?? [];
-    const styleGenres = extractStyleNames(styles);
     return {
-      likedIds: new Set(likes?.ids ?? []),
+      playlists,
+      tracks: [...tracks.values()].map((track) => ({ ...track, sources: [...track.sources], playlistIds: [...track.playlistIds], playlistContexts: [...track.playlistContexts] })),
+      likedIds,
       playCounts,
-      familiarArtists: new Set([...artistScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([artist]) => artist)),
-      preferredGenres: [...new Set([...styleGenres, ...playlistGenres])].slice(0, 20),
+      preferredGenres: [...new Set([...extractStyleNames(styles), ...playlists.flatMap((playlist) => playlist.tags)])].slice(0, 30),
     };
+  }
+
+  private async getUserPlaylists(userId: number, cookie: string) {
+    const playlists: NcmPlaylist[] = [];
+    for (let offset = 0; offset < 300; offset += 100) {
+      const payload = await this.safeCall<{ more?: boolean; playlist?: Array<{ id?: number; name?: string; tags?: string[]; subscribed?: boolean; trackCount?: number }> }>(
+        "/user/playlist",
+        { uid: String(userId), limit: "100", offset: String(offset) },
+        cookie,
+      );
+      const page = (payload?.playlist ?? []).flatMap((playlist) => playlist.id ? [{ id: playlist.id, name: playlist.name ?? "未命名歌单", tags: playlist.tags ?? [], subscribed: Boolean(playlist.subscribed), trackCount: playlist.trackCount ?? 0 }] : []);
+      playlists.push(...page);
+      if (!payload?.more || page.length < 100) break;
+    }
+    return playlists;
+  }
+
+  private async getPlaylistSongs(playlist: NcmPlaylist, cookie: string) {
+    const songs: NcmSong[] = [];
+    const total = Math.min(Math.max(playlist.trackCount, 200), 2000);
+    for (let offset = 0; offset < total; offset += 200) {
+      const payload = await this.safeCall<{ songs?: NcmSong[] }>("/playlist/track/all", { id: String(playlist.id), limit: "200", offset: String(offset) }, cookie);
+      const page = payload?.songs ?? [];
+      songs.push(...page);
+      if (page.length < 200) break;
+    }
+    return songs;
   }
 
   private async safeCall<T>(pathname: string, params: Record<string, string>, cookie: string): Promise<T | null> {
@@ -153,24 +263,26 @@ export class NcmApiClient implements NcmClient {
     cookie?: string,
     method: "GET" | "POST" = cookie ? "POST" : "GET",
     acceptedCodes: Array<number | undefined> = [200],
+    requestMaxRetries = this.maxRetries,
+    requestTimeoutMs = this.timeoutMs,
   ): Promise<T> {
     const url = new URL(pathname, ensureTrailingSlash(this.baseUrl));
     const requestParams = { ...params, ...(cookie ? { cookie } : {}) };
     if (method === "GET") for (const [key, value] of Object.entries(requestParams)) url.searchParams.set(key, value);
-    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+    for (let attempt = 0; attempt <= requestMaxRetries; attempt += 1) {
       try {
         const response = await this.request(url, {
           method,
           headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
           body: method === "POST" ? JSON.stringify(requestParams) : undefined,
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.timeout(requestTimeoutMs),
         });
         const payload = await response.json() as T;
         const status = response.ok ? payload.code : (payload.code ?? response.status);
         if (response.ok && acceptedCodes.includes(status)) return payload;
-        if (![429, 502, 503, 504].includes(status ?? 0) || attempt === this.maxRetries) throw new Error(`NCM_API_ERROR:${status ?? response.status}`);
+        if (![429, 502, 503, 504].includes(status ?? 0) || attempt === requestMaxRetries) throw new Error(`NCM_API_ERROR:${status ?? response.status}`);
       } catch (error) {
-        if (attempt === this.maxRetries || (error instanceof Error && error.message.startsWith("NCM_API_ERROR:") && !/:(429|502|503|504)$/.test(error.message))) throw error;
+        if (attempt === requestMaxRetries || (error instanceof Error && error.message.startsWith("NCM_API_ERROR:") && !/:(429|502|503|504)$/.test(error.message))) throw error;
       }
       await delay(500 * 2 ** attempt);
     }
@@ -180,6 +292,41 @@ export class NcmApiClient implements NcmClient {
 
 function artistsOf(song: NcmSong) {
   return (song.ar ?? song.artists ?? []).map((artist) => artist.name).filter(Boolean);
+}
+
+type MutableLibraryTrack = {
+  song: NcmSong;
+  sources: Set<"liked" | "playlist" | "history">;
+  playlistIds: Set<number>;
+  playlistContexts: Set<string>;
+  playlistWeight: number;
+  playCount: number;
+};
+
+function tasteEvidenceWeight(track: NcmAccountLibraryTrack) {
+  return Math.max(track.sources.includes("liked") ? 1 : 0, track.playlistWeight, track.playCount > 0 ? Math.min(1, 0.25 + Math.log10(track.playCount + 1) * 0.3) : 0.25);
+}
+
+function primarySource(sources: NcmAccountLibraryTrack["sources"]): "liked" | "playlist" | "history" {
+  if (sources.includes("liked")) return "liked";
+  if (sources.includes("playlist")) return "playlist";
+  return "history";
+}
+
+function chunks<T>(items: T[], size: number) {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size));
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>) {
+  const result = new Array<R>(items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      result[index] = await mapper(items[index]);
+    }
+  }));
+  return result;
 }
 
 function extractStyleNames(value: unknown) {

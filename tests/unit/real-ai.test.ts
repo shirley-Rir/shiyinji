@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenAICompatibleAIProvider } from "../../src/providers/ai/real";
+import { createDefaultProfile, createProfileSummary, type StructuredContext } from "../../src/domain";
 
 const modelOutput = {
   current_mood: ["疲惫"],
@@ -19,6 +20,18 @@ const modelOutput = {
   safety_risk: "none",
   confidence: 0.86,
   clarification: null,
+};
+
+const recommendationOutput = {
+  discovery_intent: { mode: "balanced", novelty_level: 0.55, allow_user_library: true, allow_adjacent_artists: true, allow_platform_search: true, excluded_sources: [], reason: "兼顾熟悉感与探索" },
+  desired_sound: { energy_range: [30, 55], lyric_density: "low", genres: ["轻电子"], moods: ["专注"], instruments: ["钢琴"], tempo_words: ["稳定"], language_preferences: [] },
+  search_lanes: [
+    { lane: "scene", query: "专注 轻电子", weight: 0.7, expected_role: "top_pick" },
+    { lane: "fresh", query: "轻电子 新歌", weight: 0.3, expected_role: "exploration" },
+  ],
+  avoid: { genres: [], moods: [], artists: [], tracks: [], reasons: [] },
+  draft_tracks: Array.from({ length: 10 }, (_, index) => ({ title: `测试歌曲${index + 1}`, artist: `测试歌手${index + 1}`, version_hint: "studio", fit_reason: "稳定且不过分打扰", risk_notes: [] })),
+  explanation_focus: ["情境匹配", "画像延展"],
 };
 
 test("real AI provider maps structured JSON into the shared context contract", async () => {
@@ -126,3 +139,53 @@ test("ordinary low mood cannot be upgraded to safety risk by the general model",
   const result = await provider.interpretContext({ text: "今天被否定了很多次，心里很堵，只想安静待一会儿" });
   assert.equal(result.context.safetyRisk, "none");
 });
+
+test("recommendation planner sends only compressed profile data and returns searchable drafts", async () => {
+  let requestText = "";
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    fetch: async (_input, init) => {
+      requestText = String(init?.body);
+      return Response.json({ choices: [{ message: { content: JSON.stringify(recommendationOutput) } }] });
+    },
+  });
+  const profile = createDefaultProfile("private-user-id");
+  const result = await provider.planRecommendation({
+    context: { ...modelContext(), hardConstraints: ["不要歌单内歌曲"] },
+    profile,
+    profileSummary: { ...createProfileSummary(profile), representativeTracks: [{ providerTrackId: "1", title: "测试歌曲1", artist: "测试歌手1", source: "playlist" }] },
+    requestedMode: "explore",
+    draftCount: 10,
+  });
+
+  assert.equal(result.discoveryIntent.mode, "explore");
+  assert.equal(result.discoveryIntent.allowUserLibrary, false);
+  assert.equal(result.draftTracks.length, 9);
+  assert.ok(result.draftTracks.every((track) => track.artist));
+  assert.equal(requestText.includes("private-user-id"), false);
+});
+
+function modelContext(): StructuredContext {
+  return {
+    source: "text" as const,
+    requestIntent: "recommendation",
+    directPlay: null,
+    currentMood: modelOutput.current_mood,
+    targetMood: modelOutput.target_mood,
+    activity: modelOutput.activity,
+    environment: modelOutput.environment,
+    socialState: "alone",
+    valence: modelOutput.valence,
+    arousal: modelOutput.arousal,
+    targetEnergy: modelOutput.target_energy,
+    lyricTolerance: "low",
+    familiarityBias: modelOutput.familiarity_bias,
+    languagePreferences: modelOutput.language_preferences,
+    transition: modelOutput.transition,
+    hardConstraints: modelOutput.hard_constraints,
+    safetyRisk: "none",
+    confidence: modelOutput.confidence,
+  };
+}

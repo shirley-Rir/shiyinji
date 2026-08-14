@@ -3,6 +3,7 @@ import { z } from "zod";
 export const recommendationRequest = z.object({
   context_session_id: z.string().min(5),
   mode: z.enum(["autoplay", "manual"]).default("autoplay"),
+  discovery_mode: z.enum(["auto", "familiar", "balanced", "explore"]).default("auto"),
   count: z.number().int().min(1).max(10).default(5),
 });
 

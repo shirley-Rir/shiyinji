@@ -21,6 +21,48 @@ export const userProfiles = sqliteTable("user_profiles", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const accountMusicProfiles = sqliteTable("account_music_profiles", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  version: integer("version").notNull(),
+  profile: text("profile").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_account_music_profiles_user_version").on(table.userId, table.version),
+  index("idx_account_music_profiles_user_created").on(table.userId, table.createdAt),
+]);
+
+export const userLibraryTracks = sqliteTable("user_library_tracks", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  providerTrackId: text("provider_track_id").notNull(),
+  title: text("title").notNull(),
+  artist: text("artist").notNull(),
+  album: text("album"),
+  durationMs: integer("duration_ms").notNull().default(0),
+  sources: text("sources").notNull(),
+  playlistIds: text("playlist_ids").notNull(),
+  playlistContexts: text("playlist_contexts").notNull(),
+  evidenceWeight: real("evidence_weight").notNull(),
+  syncedAt: text("synced_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_user_library_tracks_provider_track").on(table.userId, table.provider, table.providerTrackId),
+  index("idx_user_library_tracks_user_synced").on(table.userId, table.syncedAt),
+]);
+
+export const trackTasteFeatures = sqliteTable("track_taste_features", {
+  id: text("id").primaryKey(),
+  provider: text("provider").notNull(),
+  providerTrackId: text("provider_track_id").notNull(),
+  features: text("features").notNull(),
+  confidence: real("confidence").notNull(),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_track_taste_features_provider_track").on(table.provider, table.providerTrackId),
+]);
+
 export const musicConnections = sqliteTable("music_connections", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),

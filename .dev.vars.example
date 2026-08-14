@@ -3,6 +3,9 @@ AI_API_KEY=replace-with-your-zhipu-api-key
 AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 AI_TEXT_MODEL=glm-4.7-flash
 AI_VISION_MODEL=glm-4.6v-flash
+AI_TIMEOUT_MS=30000
+AI_MAX_RETRIES=3
+AI_RETRY_BASE_MS=1000
 
 MUSIC_PROVIDER=netease
 NCM_API_BASE_URL=http://127.0.0.1:4000

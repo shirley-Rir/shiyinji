@@ -22,3 +22,50 @@ export const modelInterpretationSchema = z.object({
 });
 
 export type ModelInterpretation = z.infer<typeof modelInterpretationSchema>;
+
+const shortStrings = (max: number) => z.array(z.string().min(1).max(80)).max(max);
+
+export const modelRecommendationBriefSchema = z.object({
+  discovery_intent: z.object({
+    mode: z.enum(["familiar", "balanced", "explore"]),
+    novelty_level: boundedNumber(0, 1),
+    allow_user_library: z.boolean(),
+    allow_adjacent_artists: z.boolean(),
+    allow_platform_search: z.boolean(),
+    excluded_sources: z.array(z.enum(["liked", "playlist", "history"])).max(3),
+    reason: z.string().min(1).max(120),
+  }),
+  desired_sound: z.object({
+    energy_range: z.tuple([boundedNumber(0, 100), boundedNumber(0, 100)]),
+    lyric_density: z.enum(["none", "low", "medium", "high"]),
+    genres: shortStrings(8),
+    moods: shortStrings(8),
+    instruments: shortStrings(8),
+    tempo_words: shortStrings(6),
+    language_preferences: shortStrings(6),
+  }),
+  search_lanes: z.array(z.object({
+    lane: z.enum(["scene", "mood", "genre", "artist_adjacent", "playlist_style", "fresh"]),
+    query: z.string().min(1).max(80),
+    weight: boundedNumber(0, 1),
+    expected_role: z.enum(["top_pick", "alternative", "exploration"]),
+  })).min(2).max(8),
+  avoid: z.object({
+    genres: shortStrings(20),
+    moods: shortStrings(20),
+    artists: shortStrings(30),
+    tracks: shortStrings(30),
+    reasons: shortStrings(12),
+  }),
+  draft_tracks: z.array(z.object({
+    title: z.string().min(1).max(120),
+    artist: z.string().min(1).max(120).optional(),
+    album: z.string().min(1).max(120).optional(),
+    version_hint: z.enum(["studio", "live", "acoustic", "remix", "any"]),
+    fit_reason: z.string().min(1).max(100),
+    risk_notes: shortStrings(5),
+  })).min(5).max(20),
+  explanation_focus: shortStrings(8),
+});
+
+export type ModelRecommendationBrief = z.infer<typeof modelRecommendationBriefSchema>;

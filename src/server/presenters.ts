@@ -1,9 +1,11 @@
-import type { RankedTrack, StructuredContext, UserProfile } from "@/src/domain";
+import type { AccountMusicProfile, RankedTrack, StructuredContext, UserProfile } from "@/src/domain";
 import type { StoredRecommendation } from "@/src/repositories/types";
 
 export function presentContext(context: StructuredContext) {
   return {
     source: context.source,
+    request_intent: context.requestIntent,
+    direct_play: context.directPlay ? { title: context.directPlay.title, artist: context.directPlay.artist, version_hint: context.directPlay.versionHint } : null,
     current_mood: context.currentMood,
     target_mood: context.targetMood,
     activity: context.activity,
@@ -31,6 +33,28 @@ export function presentProfile(profile: UserProfile) {
     long_term_traits: profile.longTermTraits,
     scene_preferences: profile.scenePreferences,
     negative_track_ids: profile.negativeTrackIds,
+    music_profile: profile.musicProfile ? presentMusicProfile(profile.musicProfile) : null,
+  };
+}
+
+export function presentMusicProfile(profile: AccountMusicProfile) {
+  return {
+    provider: profile.provider,
+    version: profile.version,
+    analyzed_at: profile.analyzedAt,
+    confidence: profile.confidence,
+    source_coverage: profile.sourceCoverage,
+    genres: profile.genres,
+    languages: profile.languages,
+    artists: profile.artists,
+    lyric_themes: profile.lyricThemes,
+    playlist_themes: profile.playlistThemes,
+    preferred_energy: profile.preferredEnergy,
+    preferred_valence: profile.preferredValence,
+    lyric_preference: profile.lyricPreference,
+    diversity: profile.diversity,
+    preference_clusters: profile.preferenceClusters,
+    representative_tracks: profile.representativeTracks,
   };
 }
 

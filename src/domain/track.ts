@@ -27,6 +27,11 @@ export type TrackCandidate = {
   coverVariant: string;
   tags: string[];
   features: TrackFeatures;
+  retrieval?: {
+    source: "draft" | "search_fallback" | "user_library" | "direct_request";
+    fitReason: string;
+    matchScore?: number;
+  };
 };
 
 export type PlaybackHandle = {
@@ -35,4 +40,16 @@ export type PlaybackHandle = {
   url: string;
   mimeType: string;
   expiresAt: string;
+};
+
+export type TrackLyricLine = {
+  timeMs: number | null;
+  text: string;
+  translation?: string;
+};
+
+export type TrackLyrics = {
+  trackId: string;
+  synced: boolean;
+  lines: TrackLyricLine[];
 };
