@@ -9,6 +9,7 @@ export type ContextInput = {
     name: string;
     type: string;
     size: number;
+    dataUrl?: string;
   };
   timezone?: string;
 };

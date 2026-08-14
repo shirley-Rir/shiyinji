@@ -12,7 +12,8 @@
     "test": "npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/unit/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "eval:context": "tsx scripts/evaluate-context.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

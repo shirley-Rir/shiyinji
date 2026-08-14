@@ -8,6 +8,8 @@ export function apiError(error: unknown): Response {
   if (code.endsWith("_NOT_FOUND")) return errorResponse(code, "请求的资源不存在", 404, false);
   if (code === "TRACK_NOT_PLAYABLE") return errorResponse(code, "这首歌当前无法播放", 409, true);
   if (code === "DATABASE_UNAVAILABLE") return errorResponse(code, "数据服务暂时不可用", 503, true);
+  if (code === "AI_API_KEY_REQUIRED") return errorResponse(code, "语义理解服务尚未配置", 503, false);
+  if (code.startsWith("AI_PROVIDER_")) return errorResponse("AI_PROVIDER_UNAVAILABLE", "语义理解服务暂时不可用", 503, true);
   console.error("[shiyinji-api]", error);
   return errorResponse("INTERNAL_ERROR", "服务暂时没有接住这次请求", 500, true);
 }

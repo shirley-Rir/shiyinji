@@ -32,6 +32,8 @@
 - [API 职责与契约](docs/architecture/03-api-contracts.md)
 - [功能链路与时序](docs/architecture/04-feature-flows.md)
 - [当前完成度与实施顺序](docs/architecture/05-current-progress.md)
+- [情境语义模型选型与评测](docs/ai/model-selection.md)
+- [网易云 Enhanced API 对接研究](docs/integrations/netease-cloud-api.md)
 - [Web MVP PRD](04-web-mvp-prd.md)
 - [技术选型与资源](05-web-mvp-tech-selection-and-resources.md)
 
@@ -48,6 +50,12 @@ npm run dev
 
 ```bash
 npm test
+```
+
+真实语义模型评测需要先根据 `.dev.vars.example` 配置智谱 API Key，再运行：
+
+```bash
+npm run eval:context
 ```
 
 ## 技术形态

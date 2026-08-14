@@ -136,12 +136,6 @@ export function MusicApp() {
   }, [isPlaying, currentIndex, currentTrack?.source]);
 
   useEffect(() => {
-    if (bootstrapped.current) return;
-    bootstrapped.current = true;
-    void runRecommendation(query, null);
-  }, []);
-
-  useEffect(() => {
     return () => {
       if (imageUrl) URL.revokeObjectURL(imageUrl);
     };
@@ -174,6 +168,12 @@ export function MusicApp() {
       setIsLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+    void runRecommendation(query, null);
+  }, []);
 
   function handleImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -391,6 +391,8 @@ export function MusicApp() {
                         </div>
                       </div>
 
+                      {/* Music playback has no equivalent caption track. */}
+                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <audio
                         ref={audioRef}
                         src={currentTrack.source}

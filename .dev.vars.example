@@ -1,0 +1,5 @@
+AI_PROVIDER=zhipu
+AI_API_KEY=replace-with-your-zhipu-api-key
+AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+AI_TEXT_MODEL=glm-4.7-flash
+AI_VISION_MODEL=glm-4.6v-flash

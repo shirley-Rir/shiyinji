@@ -17,8 +17,18 @@ export async function POST(request: Request) {
     if (image && (image.size > 10 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(image.type))) return errorResponse("INVALID_IMAGE", "图片需为 JPEG、PNG 或 WebP，且不超过 10MB", 400, false);
 
     const imageMetadata = image ? { name: image.name, type: image.type, size: image.size } : null;
-    const interpretation = await aiProvider.interpretContext({ text, image: imageMetadata ?? undefined, timezone: String(form.get("timezone") ?? "") || undefined });
+    const modelImage = image ? { ...imageMetadata!, dataUrl: await fileToDataUrl(image) } : undefined;
+    const interpretation = await aiProvider.interpretContext({ text, image: modelImage, timezone: String(form.get("timezone") ?? "") || undefined });
     const session = await repository.createContextSession(user.id, text, imageMetadata, interpretation);
     return Response.json({ context_session_id: session.id, context: presentContext(session.context), clarification: session.clarification, provider: interpretation.provider }, { status: 201 });
   } catch (error) { return apiError(error); }
+}
+
+async function fileToDataUrl(file: File) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return `data:${file.type};base64,${btoa(binary)}`;
 }
