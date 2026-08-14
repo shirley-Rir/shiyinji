@@ -1,5 +1,6 @@
 export type ApiTrack = {
   track_id: string;
+  provider: string;
   position: number;
   role: "top_pick" | "alternative";
   title: string;

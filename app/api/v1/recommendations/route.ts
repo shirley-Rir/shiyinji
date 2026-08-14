@@ -12,6 +12,9 @@ export async function POST(request: Request) {
     const payload = recommendationRequest.parse(await request.json());
     const contextSession = await repository.getContextSession(user.id, payload.context_session_id);
     if (!contextSession) return errorResponse("CONTEXT_NOT_FOUND", "这次情境已经失效", 404, false);
+    if (contextSession.context.safetyRisk === "high") {
+      return errorResponse("SAFETY_SUPPORT_REQUIRED", "此刻请先联系身边可信任的人或当地紧急服务，音乐不能替代及时的现实支持", 409, false);
+    }
     const profile = await repository.getProfile(user.id);
     const plan = await recommendationService.recommend(contextSession.context, profile, payload.count);
     if (!plan.tracks.length) return errorResponse("NO_PLAYABLE_TRACK", "当前没有符合约束且可播放的歌曲", 409, true);

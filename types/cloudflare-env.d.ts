@@ -6,5 +6,9 @@ declare namespace Cloudflare {
     AI_BASE_URL?: string;
     AI_TEXT_MODEL?: string;
     AI_VISION_MODEL?: string;
+    MUSIC_PROVIDER?: "mock" | "netease";
+    NCM_API_BASE_URL?: string;
+    NCM_PLAYBACK_LEVEL?: string;
+    NCM_ALLOW_TRIAL?: string;
   }
 }

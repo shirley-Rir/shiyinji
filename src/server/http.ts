@@ -10,6 +10,7 @@ export function apiError(error: unknown): Response {
   if (code === "DATABASE_UNAVAILABLE") return errorResponse(code, "数据服务暂时不可用", 503, true);
   if (code === "AI_API_KEY_REQUIRED") return errorResponse(code, "语义理解服务尚未配置", 503, false);
   if (code.startsWith("AI_PROVIDER_")) return errorResponse("AI_PROVIDER_UNAVAILABLE", "语义理解服务暂时不可用", 503, true);
+  if (code.startsWith("NCM_API_ERROR")) return errorResponse("MUSIC_PROVIDER_UNAVAILABLE", "音乐服务暂时不可用", 503, true);
   console.error("[shiyinji-api]", error);
   return errorResponse("INTERNAL_ERROR", "服务暂时没有接住这次请求", 500, true);
 }

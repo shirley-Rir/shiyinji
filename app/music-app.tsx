@@ -32,11 +32,13 @@ import {
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { adjustRecommendation, createContextRecommendation, getHistory, getProfile, recordPlayback, resolvePlayback, sendFeedback, updatePrivacy, type ApiContext, type ApiProfile, type ApiTrack } from "@/src/client/api";
+import { prepareContextImage } from "@/src/client/image";
 
 type View = "listen" | "history" | "profile" | "settings";
 
 type Track = {
   id: string;
+  provider: string;
   title: string;
   artist: string;
   duration: string;
@@ -60,6 +62,8 @@ const QUICK_SCENES = [
   { label: "有点低落", icon: CloudSun, text: "今天有点低落，不想被强行打气，只想有人安静陪一会儿。" },
 ];
 
+const INITIAL_QUERY = "刚结束一天的工作，脑子还有点乱。想慢慢安静下来，但不要太伤感。";
+
 function formatTime(value: number) {
   if (!Number.isFinite(value)) return "0:00";
   const minutes = Math.floor(value / 60);
@@ -79,6 +83,7 @@ function contextLabels(context: ApiContext) {
 function mapApiTracks(tracks: ApiTrack[]): Track[] {
   return tracks.map((track) => ({
     id: track.track_id,
+    provider: track.provider,
     title: track.title,
     artist: track.artist,
     duration: formatTime(track.duration_ms / 1000),
@@ -102,7 +107,7 @@ function Cover({ variant, small = false }: { variant: string; small?: boolean })
 
 export function MusicApp() {
   const [view, setView] = useState<View>("listen");
-  const [query, setQuery] = useState("刚结束一天的工作，脑子还有点乱。想慢慢安静下来，但不要太伤感。");
+  const [query, setQuery] = useState(INITIAL_QUERY);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageName, setImageName] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -172,17 +177,23 @@ export function MusicApp() {
   useEffect(() => {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
-    void runRecommendation(query, null);
+    void runRecommendation(INITIAL_QUERY, null);
   }, []);
 
-  function handleImage(event: ChangeEvent<HTMLInputElement>) {
+  async function handleImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    setImageUrl(URL.createObjectURL(file));
-    setImageName(file.name);
-    setImageFile(file);
-    setError("");
+    try {
+      const prepared = await prepareContextImage(file);
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      setImageUrl(URL.createObjectURL(prepared));
+      setImageName(file.name);
+      setImageFile(prepared);
+      setError("");
+    } catch {
+      setError("图片处理失败，请换一张 JPEG、PNG 或 WebP 图片。");
+      if (fileRef.current) fileRef.current.value = "";
+    }
   }
 
   function removeImage() {
@@ -297,7 +308,7 @@ export function MusicApp() {
           </div>
           <button className="provider-status" onClick={() => setView("settings")}>
             <span className="status-dot" />
-            演示曲库
+            {tracks[0]?.provider === "netease" ? "网易云曲库" : "演示曲库"}
             <ChevronRight size={15} />
           </button>
         </header>
@@ -343,7 +354,7 @@ export function MusicApp() {
                 )}
                 {error && <p className="form-error" role="alert">{error}</p>}
                 <div className="composer-actions">
-                  <input ref={fileRef} type="file" accept="image/*" onChange={handleImage} hidden />
+                  <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleImage} hidden />
                   <button className="image-button" type="button" onClick={() => fileRef.current?.click()}>
                     <ImagePlus size={18} />
                     加一张照片

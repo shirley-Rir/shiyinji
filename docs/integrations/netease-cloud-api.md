@@ -77,7 +77,7 @@ sequenceDiagram
     P->>NCM: 用户歌单 + cloudsearch + song/detail
     P-->>R: TrackCandidate[]
     R->>P: filterPlayable(trackIds)
-    P->>NCM: /check/music + 权限字段
+    P->>NCM: /song/detail privileges
     P-->>R: 可播放 Track ID
     R-->>R: 排序并保存推荐
     R->>P: resolvePlayback(trackId)
@@ -100,3 +100,16 @@ sequenceDiagram
 3. 增加二维码连接 API、Cookie 加密和歌单分页同步。
 4. 最后实现 `resolvePlayback`，用免费歌曲和有合法会员权限的测试账号做封闭验证。
 5. 商业化前重新评估正式授权服务；第三方 Enhanced API 不作为商业版权方案。
+
+## 7. 当前实现状态
+
+已实现 `NcmApiClient` 与 `NeteaseMusicProvider` 的本地开发版本：
+
+- 根据情境生成三路搜索词并使用 `/cloudsearch` 召回歌曲。
+- 通过 `/song/detail` 批量读取曲目和 `privileges`。
+- 过滤灰色、区域受限和 `plLevel=none` 的曲目。
+- 使用 `/song/url/v1` 获取短期播放地址，固定 `unblock=false`。
+- 默认拒绝带 `freeTrialInfo` 的试听 URL。
+- 搜索单路失败可降级，429/502/503/504 与网络抖动可短重试。
+
+当前尚未实现二维码登录与每个拾音记账号独立保存网易 Cookie，因此只适用于本机单用户封闭验证。

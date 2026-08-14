@@ -58,6 +58,8 @@ npm test
 npm run eval:context
 ```
 
+本地真实链路还需要先启动 `ncm-api-enhanced-main` 的 `4000` 端口服务。`.dev.vars` 中设置 `MUSIC_PROVIDER=netease` 后，Web API 会使用真实网易云搜索、权限过滤和播放 URL；该模式仅用于本机封闭测试。
+
 ## 技术形态
 
 当前使用 React、TypeScript、vinext、Tailwind CSS、Drizzle ORM、Cloudflare D1 和 lucide-react，并保留 Cloudflare Worker 兼容输出。业务层已经按 `AIProvider`、`MusicProvider`、`RecommendationService` 和 `Repository` 拆分，后续可独立替换模型、音乐平台和数据库实现。

@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
-    "eval:context": "tsx scripts/evaluate-context.ts"
+    "eval:context": "tsx scripts/evaluate-context.ts",
+    "eval:context:rescore": "tsx scripts/rescore-context-report.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

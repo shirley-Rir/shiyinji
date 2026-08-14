@@ -3,3 +3,8 @@ AI_API_KEY=replace-with-your-zhipu-api-key
 AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 AI_TEXT_MODEL=glm-4.7-flash
 AI_VISION_MODEL=glm-4.6v-flash
+
+MUSIC_PROVIDER=netease
+NCM_API_BASE_URL=http://127.0.0.1:4000
+NCM_PLAYBACK_LEVEL=standard
+NCM_ALLOW_TRIAL=false

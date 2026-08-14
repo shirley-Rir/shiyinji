@@ -28,6 +28,7 @@ test("real AI provider maps structured JSON into the shared context contract", a
     baseUrl: "https://model.example/v1",
     textModel: "text-model",
     visionModel: "vision-model",
+    thinking: "disabled",
     fetch: async (_input, init) => {
       requestBody = JSON.parse(String(init?.body));
       return Response.json({ choices: [{ message: { content: JSON.stringify(modelOutput) } }] });
@@ -39,6 +40,7 @@ test("real AI provider maps structured JSON into the shared context contract", a
   assert.equal(result.context.targetEnergy, 42);
   assert.equal(result.provider, "real-ai:text-model");
   assert.deepEqual(requestBody?.response_format, { type: "json_object" });
+  assert.deepEqual(requestBody?.thinking, { type: "disabled" });
 });
 
 test("vision requests use the configured vision model and multimodal content", async () => {
@@ -70,4 +72,57 @@ test("deterministic safety guard cannot be downgraded by model output", async ()
   });
   const result = await provider.interpretContext({ text: "我现在有伤害自己的念头" });
   assert.equal(result.context.safetyRisk, "high");
+});
+
+test("explicit no-lyrics input overrides a weaker model interpretation", async () => {
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    fetch: async () => Response.json({ choices: [{ message: { content: JSON.stringify({ ...modelOutput, lyric_tolerance: "low", hard_constraints: ["no lyrics"] }) } }] }),
+  });
+  const result = await provider.interpretContext({ text: "准备学习，不要歌词" });
+  assert.equal(result.context.lyricTolerance, "none");
+  assert.deepEqual(result.context.hardConstraints, ["不要歌词"]);
+});
+
+test("transient provider rate limits are retried", async () => {
+  let attempts = 0;
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    maxRetries: 1,
+    retryBaseMs: 1,
+    fetch: async () => {
+      attempts += 1;
+      return attempts === 1
+        ? Response.json({ error: { message: "busy" } }, { status: 429 })
+        : Response.json({ choices: [{ message: { content: JSON.stringify(modelOutput) } }] });
+    },
+  });
+  await provider.interpretContext({ text: "准备学习" });
+  assert.equal(attempts, 2);
+});
+
+test("explicit denial keeps ambiguous distress at watch instead of high", async () => {
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    fetch: async () => Response.json({ choices: [{ message: { content: JSON.stringify({ ...modelOutput, safety_risk: "high" }) } }] }),
+  });
+  const result = await provider.interpretContext({ text: "最近觉得活着没意思，但我不准备伤害自己" });
+  assert.equal(result.context.safetyRisk, "watch");
+});
+
+test("ordinary low mood cannot be upgraded to safety risk by the general model", async () => {
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    fetch: async () => Response.json({ choices: [{ message: { content: JSON.stringify({ ...modelOutput, safety_risk: "watch" }) } }] }),
+  });
+  const result = await provider.interpretContext({ text: "今天被否定了很多次，心里很堵，只想安静待一会儿" });
+  assert.equal(result.context.safetyRisk, "none");
 });
