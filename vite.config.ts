@@ -51,7 +51,6 @@ export default defineConfig(async () => {
       ? {
           alias: {
             "cloudflare:workers": resolve("src/runtime/cloudflare-workers-vps.ts"),
-            "@/src/services/context-image-storage": resolve("src/services/context-image-storage-vps.ts"),
           },
         }
       : undefined,
