@@ -141,6 +141,8 @@ export function MusicApp() {
   const lyricsRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const bootstrapped = useRef(false);
+  const recommendationRequestRef = useRef(0);
+  const selectionRequestRef = useRef(0);
   const currentTrack = tracks[currentIndex];
   const currentLyrics = lyrics?.track_id === currentTrack?.id ? lyrics : null;
   const lyricsLoading = Boolean(currentTrack?.id && !currentLyrics);
@@ -153,6 +155,15 @@ export function MusicApp() {
     getAuthSession().then((result) => { if (active) setAuthUser(result.user); }).catch(() => { if (active) setAuthUser(null); });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.load();
+    setProgress(0);
+    setDuration(0);
+  }, [recommendationId, currentTrack?.id, currentTrack?.source]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -203,15 +214,21 @@ export function MusicApp() {
   }
 
   async function runRecommendation(text: string, image: File | null) {
+    const requestId = ++recommendationRequestRef.current;
+    selectionRequestRef.current += 1;
+    audioRef.current?.pause();
     try {
       setError("");
       setIsLoading(true);
       setIsPlaying(false);
       setLyrics(null);
       const result = await createContextRecommendation(text, image);
+      if (requestId !== recommendationRequestRef.current) return;
       const mappedTracks = mapApiTracks(result.recommendation.tracks);
       if (result.context.context.request_intent === "direct_play" && mappedTracks[0]) {
         const playback = await resolvePlayback(result.recommendation.recommendation_id, mappedTracks[0].id);
+        if (requestId !== recommendationRequestRef.current) return;
+        if (playback.track_id !== mappedTracks[0].id) throw new Error("播放资源与所选歌曲不一致，请重试。");
         mappedTracks[0] = { ...mappedTracks[0], source: playback.url };
       }
       setTracks(mappedTracks);
@@ -221,11 +238,13 @@ export function MusicApp() {
       setCurrentIndex(0);
       setHasRecommendation(true);
       setProgress(0);
+      setDuration(0);
       setIsPlaying(result.context.context.request_intent === "direct_play");
     } catch (requestError) {
+      if (requestId !== recommendationRequestRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "这次推荐没有接住，请稍后重试。");
     } finally {
-      setIsLoading(false);
+      if (requestId === recommendationRequestRef.current) setIsLoading(false);
     }
   }
 
@@ -262,6 +281,10 @@ export function MusicApp() {
   async function selectTrack(index: number, autoPlay = true) {
     const selected = tracks[index];
     if (!selected || !recommendationId) return;
+    const requestId = ++selectionRequestRef.current;
+    audioRef.current?.pause();
+    setIsPlaying(false);
+    setError("");
     try {
       if (currentTrack && currentTrack.id !== selected.id) {
         void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "skipped", positionMs: Math.round(progress * 1000) });
@@ -269,15 +292,20 @@ export function MusicApp() {
       let source = selected.source;
       if (!source) {
         const playback = await resolvePlayback(recommendationId, selected.id);
+        if (requestId !== selectionRequestRef.current) return;
+        if (playback.track_id !== selected.id) throw new Error("播放资源与所选歌曲不一致，请重试。");
         source = playback.url;
         setTracks((current) => current.map((track, trackIndex) => trackIndex === index ? { ...track, source } : track));
       }
+      if (requestId !== selectionRequestRef.current) return;
       setCurrentIndex(index);
       setProgress(0);
+      setDuration(0);
       setLiked(false);
       setDisliked(false);
       setIsPlaying(autoPlay);
     } catch (requestError) {
+      if (requestId !== selectionRequestRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "这首歌暂时无法播放");
     }
   }
@@ -316,21 +344,30 @@ export function MusicApp() {
   async function handleDirection(label: string) {
     setFeedback(label);
     if (!recommendationId || !currentTrack) return;
+    const requestId = ++recommendationRequestRef.current;
+    selectionRequestRef.current += 1;
+    audioRef.current?.pause();
+    setIsPlaying(false);
     const directionByLabel: Record<string, string> = { "更安静": "quieter", "更有劲": "more_energy", "更熟悉": "more_familiar", "更新鲜": "more_fresh" };
     try {
       await sendFeedback({ recommendationId, trackId: currentTrack.id, type: "direction", scope: "current_context", direction: directionByLabel[label] });
+      if (requestId !== recommendationRequestRef.current) return;
       const adjusted = await adjustRecommendation(recommendationId, directionByLabel[label]);
-      setIsPlaying(false);
+      if (requestId !== recommendationRequestRef.current) return;
       setTracks(mapApiTracks(adjusted.tracks));
       setRecommendationId(adjusted.recommendation_id);
       setCurrentIndex(0);
       setProgress(0);
     } catch (requestError) {
+      if (requestId !== recommendationRequestRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "方向反馈暂时没有保存");
     }
   }
 
   async function signOut() {
+    recommendationRequestRef.current += 1;
+    selectionRequestRef.current += 1;
+    audioRef.current?.pause();
     setIsPlaying(false);
     await logoutAccount().catch(() => undefined);
     bootstrapped.current = false;
@@ -501,6 +538,7 @@ export function MusicApp() {
                       {/* Music playback has no equivalent caption track. */}
                       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <audio
+                        key={`${recommendationId}:${currentTrack.id}:${currentTrack.source ?? "pending"}`}
                         ref={audioRef}
                         src={currentTrack.source}
                         preload="metadata"
