@@ -8,7 +8,7 @@ const qrCheckRequest = z.object({ key: z.string().min(8).max(200) });
 
 export async function GET(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const sessions = requireNeteaseSessions();
     await sessions.getSession(user.id);
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const qr = await requireNeteaseSessions().createQr(user.id);
     return Response.json({ key: qr.key, qr_image: qr.qrImage, connection: { status: "waiting" } }, { status: 201 });
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const payload = qrCheckRequest.parse(await request.json());
     return Response.json({ connection: await requireNeteaseSessions().checkQr(user.id, payload.key) });
@@ -39,9 +39,9 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
-    requireNeteaseSessions().disconnect(user.id);
+    await requireNeteaseSessions().disconnect(user.id);
     return new Response(null, { status: 204 });
   } catch (error) { return apiError(error); }
 }

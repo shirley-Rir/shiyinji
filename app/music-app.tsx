@@ -12,6 +12,7 @@ import {
   Home,
   ImagePlus,
   ListMusic,
+  LogOut,
   MapPin,
   Music2,
   Pause,
@@ -35,8 +36,9 @@ import {
   X,
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { adjustRecommendation, checkNeteaseQr, createContextRecommendation, createNeteaseQr, disconnectNetease, getHistory, getNeteaseConnection, getProfile, getTrackLyrics, recordPlayback, resolvePlayback, sendFeedback, syncMusicProfile, updatePrivacy, updateProfile, type ApiContext, type ApiProfile, type ApiTrack, type ApiTrackLyrics, type NeteaseConnection } from "@/src/client/api";
+import { adjustRecommendation, checkNeteaseQr, createContextRecommendation, createNeteaseQr, disconnectNetease, getAuthSession, getHistory, getNeteaseConnection, getProfile, getTrackLyrics, logoutAccount, recordPlayback, resolvePlayback, sendFeedback, syncMusicProfile, updatePrivacy, updateProfile, type ApiContext, type ApiProfile, type ApiTrack, type ApiTrackLyrics, type AuthUser, type NeteaseConnection } from "@/src/client/api";
 import { prepareContextImage } from "@/src/client/image";
+import { AuthScreen } from "./auth-screen";
 
 type View = "listen" | "history" | "profile" | "settings";
 
@@ -113,6 +115,7 @@ function Cover({ variant, small = false }: { variant: string; small?: boolean })
 }
 
 export function MusicApp() {
+  const [authUser, setAuthUser] = useState<AuthUser | null | undefined>(undefined);
   const [view, setView] = useState<View>("listen");
   const [query, setQuery] = useState(INITIAL_QUERY);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -144,6 +147,12 @@ export function MusicApp() {
   const activeLyricIndex = currentLyrics?.synced
     ? currentLyrics.lines.reduce((active, line, index) => line.time_ms !== null && line.time_ms <= progress * 1000 + 180 ? index : active, -1)
     : -1;
+
+  useEffect(() => {
+    let active = true;
+    getAuthSession().then((result) => { if (active) setAuthUser(result.user); }).catch(() => { if (active) setAuthUser(null); });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -215,10 +224,10 @@ export function MusicApp() {
   }
 
   useEffect(() => {
-    if (bootstrapped.current) return;
+    if (!authUser || bootstrapped.current) return;
     bootstrapped.current = true;
     void runRecommendation(INITIAL_QUERY, null);
-  }, []);
+  }, [authUser]);
 
   async function handleImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -315,6 +324,20 @@ export function MusicApp() {
     }
   }
 
+  async function signOut() {
+    setIsPlaying(false);
+    await logoutAccount().catch(() => undefined);
+    bootstrapped.current = false;
+    setAuthUser(null);
+    setHasRecommendation(false);
+    setTracks([]);
+  }
+
+  if (authUser === undefined) return <div className="auth-loading"><Music2 size={24} /><span>拾音记</span></div>;
+  if (!authUser) return <AuthScreen onAuthenticated={setAuthUser} />;
+
+  const userInitials = authUser.display_name.trim().slice(0, 2).toUpperCase() || "拾";
+
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
@@ -336,7 +359,7 @@ export function MusicApp() {
             );
           })}
         </nav>
-        <button className="avatar" onClick={() => setView("profile")} aria-label="打开个人画像">LY</button>
+        <button className="avatar" onClick={() => setView("profile")} aria-label="打开个人画像" title={authUser.email}>{userInitials}</button>
       </aside>
 
       <main className="main-area">
@@ -346,11 +369,15 @@ export function MusicApp() {
             <span>拾音记</span>
             <span className="version">DEMO V1</span>
           </div>
-          <button className="provider-status" onClick={() => setView("settings")}>
-            <span className="status-dot" />
-            {tracks[0]?.provider === "netease" ? "网易云曲库" : "演示曲库"}
-            <ChevronRight size={15} />
-          </button>
+          <div className="topbar-actions">
+            <button className="provider-status" onClick={() => setView("settings")}>
+              <span className="status-dot" />
+              {tracks[0]?.provider === "netease" ? "网易云曲库" : "演示曲库"}
+              <ChevronRight size={15} />
+            </button>
+            <span className="account-name">{authUser.display_name}</span>
+            <button className="icon-action" onClick={() => void signOut()} aria-label="退出登录" title="退出登录"><LogOut size={17} /></button>
+          </div>
         </header>
 
         {view === "listen" && (

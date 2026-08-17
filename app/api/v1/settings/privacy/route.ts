@@ -8,7 +8,7 @@ const schema = z.object({ personalization_enabled: z.boolean() });
 
 export async function PATCH(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const payload = schema.parse(await request.json());
     const profile = await repository.updateProfile(user.id, { personalizationEnabled: payload.personalization_enabled });

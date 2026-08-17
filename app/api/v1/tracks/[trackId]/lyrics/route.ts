@@ -4,7 +4,7 @@ import { requireApiUser } from "@/src/server/identity";
 
 export async function GET(request: Request, { params }: { params: Promise<{ trackId: string }> }) {
   try {
-    requireApiUser(request);
+    await requireApiUser(request);
     const { trackId } = await params;
     const lyrics = musicProvider.getLyrics
       ? await musicProvider.getLyrics(trackId)

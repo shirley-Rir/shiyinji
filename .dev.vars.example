@@ -3,6 +3,7 @@ AI_API_KEY=replace-with-your-zhipu-api-key
 AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 AI_TEXT_MODEL=glm-4.7-flash
 AI_VISION_MODEL=glm-4.6v-flash
+AI_VISION_FALLBACK_MODEL=glm-4v-flash
 AI_TIMEOUT_MS=30000
 AI_MAX_RETRIES=3
 AI_RETRY_BASE_MS=1000
@@ -14,3 +15,19 @@ NCM_ALLOW_TRIAL=false
 NCM_AUTH_MODE=qr
 NCM_PHONE=
 NCM_MD5_PASSWORD=
+MUSIC_CREDENTIAL_ENCRYPTION_KEY=replace-with-32-byte-base64url-key
+
+# Local auth: return the verification code in the page for development only.
+APP_ENV=development
+AUTH_EXPOSE_DEV_CODE=true
+AUTH_SESSION_DAYS=14
+EMAIL_PROVIDER=qq-smtp
+RESEND_API_KEY=
+EMAIL_FROM=拾音记 <login@example.com>
+QQ_SMTP_HOST=smtp.qq.com
+QQ_SMTP_PORT=465
+QQ_SMTP_USER=
+QQ_SMTP_AUTH_CODE=
+EMAIL_FROM_NAME=拾音记
+EMAIL_CLIENT_HOSTNAME=music.shilrey.top
+EMAIL_TIMEOUT_MS=15000

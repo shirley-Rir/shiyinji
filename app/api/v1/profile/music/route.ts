@@ -5,7 +5,7 @@ import { presentMusicProfile } from "@/src/server/presenters";
 
 export async function GET(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const profile = await repository.getAccountMusicProfile(user.id);
     return Response.json({ music_profile: profile ? presentMusicProfile(profile) : null });

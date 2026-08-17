@@ -4,7 +4,7 @@ import { requireApiUser } from "@/src/server/identity";
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ sessionId: string }> }) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const { sessionId } = await params;
     const deleted = await repository.deleteHistory(user.id, sessionId);

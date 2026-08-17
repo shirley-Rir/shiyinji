@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { initializeDatabase } from "@/db/initialize";
-import { accountMusicProfiles, contextSessions, feedbackEvents, playbackEvents, recommendationItems, recommendations, trackTasteFeatures, tracks, userLibraryTracks, userProfiles, users } from "@/db/schema";
+import { accountMusicProfiles, contextSessions, feedbackEvents, musicConnections, playbackEvents, recommendationItems, recommendations, trackTasteFeatures, tracks, userLibraryTracks, userProfiles, users } from "@/db/schema";
 import { createDefaultProfile, type AccountMusicProfile, type AccountMusicProfileSyncSnapshot, type ContextInterpretation, type RankedTrack, type ScoreBreakdown, type StructuredContext, type TrackCandidate, type TrackTasteFeatures, type UserProfile } from "@/src/domain";
 import type { AppUser, ShiyinjiRepository, StoredContextSession, StoredRecommendation } from "./types";
 
@@ -115,6 +115,36 @@ export class D1ShiyinjiRepository implements ShiyinjiRepository {
     const db = await this.db();
     const rows = await db.select().from(trackTasteFeatures).where(and(eq(trackTasteFeatures.provider, provider), inArray(trackTasteFeatures.providerTrackId, providerTrackIds))).all();
     return rows.map((row) => parse<TrackTasteFeatures>(row.features));
+  }
+
+  async getMusicConnection(userId: string, provider: string) {
+    const db = await this.db();
+    const row = await db.select({ encryptedCredential: musicConnections.encryptedCredential, credentialExpiresAt: musicConnections.credentialExpiresAt })
+      .from(musicConnections)
+      .where(and(eq(musicConnections.userId, userId), eq(musicConnections.provider, provider), eq(musicConnections.status, "connected"))).get();
+    return row?.encryptedCredential ? { encryptedCredential: row.encryptedCredential, credentialExpiresAt: row.credentialExpiresAt } : null;
+  }
+
+  async saveMusicConnection(userId: string, provider: string, encryptedCredential: string, credentialExpiresAt: string | null = null) {
+    const db = await this.db();
+    const now = new Date().toISOString();
+    await db.insert(musicConnections).values({
+      id: `mc_${crypto.randomUUID()}`,
+      userId,
+      provider,
+      status: "connected",
+      encryptedCredential,
+      credentialExpiresAt,
+      updatedAt: now,
+    }).onConflictDoUpdate({
+      target: [musicConnections.userId, musicConnections.provider],
+      set: { status: "connected", encryptedCredential, credentialExpiresAt, updatedAt: now },
+    });
+  }
+
+  async deleteMusicConnection(userId: string, provider: string) {
+    const db = await this.db();
+    await db.delete(musicConnections).where(and(eq(musicConnections.userId, userId), eq(musicConnections.provider, provider)));
   }
 
   async createContextSession(userId: string, inputText: string, imageMetadata: object | null, interpretation: ContextInterpretation): Promise<StoredContextSession> {

@@ -10,6 +10,7 @@ const context: StructuredContext = {
 };
 
 class FakeNcmClient implements NcmClient {
+  searchQueries: string[] = [];
   playback: NcmPlayback = { id: 101, url: "https://music.example/101.mp3", type: "mp3", expi: 600, freeTrialInfo: null };
   songs: NcmSong[] = [
     { id: 101, name: "安静书页", dt: 180000, ar: [{ name: "测试艺人" }], al: { name: "测试专辑" } },
@@ -20,7 +21,7 @@ class FakeNcmClient implements NcmClient {
     { id: 102, st: 0, toast: false, plLevel: "none" },
   ];
 
-  async searchSongs() { return this.songs; }
+  async searchSongs(query: string) { this.searchQueries.push(query); return this.songs; }
   async getSongDetails() { return { songs: this.songs, privileges: this.privileges }; }
   async getPlayback() { return this.playback; }
   async getLyrics() { return { nolyric: true }; }
@@ -45,6 +46,26 @@ test("Netease provider retrieves domain candidates and filters by account playab
   assert.equal(candidates[0].features.provenance?.lyricDensity, "lyrics");
   assert.notEqual(candidates[0].features.energy, context.targetEnergy);
   assert.deepEqual(await provider.filterPlayable(candidates.map((item) => item.id)), ["netease:101"]);
+});
+
+test("image fallback retrieval carries concrete visual scene evidence into music search", async () => {
+  const client = new FakeNcmClient();
+  const provider = new NeteaseMusicProvider(client);
+  const imageContext: StructuredContext = {
+    ...context,
+    source: "image",
+    currentMood: ["宁静", "开阔"],
+    targetMood: ["宁静", "开阔"],
+    activity: "徒步",
+    environment: ["乡村小路", "绿色植被", "远处山脉"],
+    lyricTolerance: "medium",
+  };
+
+  await provider.retrieveCandidates({ context: imageContext, profile: createDefaultProfile("test-user"), limit: 10 });
+
+  assert.match(client.searchQueries[0], /徒步/);
+  assert.match(client.searchQueries[0], /乡村小路/);
+  assert.equal(client.searchQueries.some((query) => query === "情绪陪伴 轻音乐"), false);
 });
 
 test("Netease provider derives account familiarity before second-stage ranking", async () => {

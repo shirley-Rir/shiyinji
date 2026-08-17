@@ -7,7 +7,7 @@ import { recommendationRequest } from "@/src/server/request";
 
 export async function POST(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const payload = recommendationRequest.parse(await request.json());
     const contextSession = await repository.getContextSession(user.id, payload.context_session_id);

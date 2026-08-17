@@ -7,7 +7,7 @@ import { createDirectPlayInterpretation } from "@/src/services/request-intent";
 
 export async function POST(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const form = await request.formData();
     const text = String(form.get("text") ?? "").trim();

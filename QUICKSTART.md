@@ -1,6 +1,6 @@
 # 拾音记 Demo V1：项目快速接手
 
-> 更新时间：2026-08-14。本文用于让新的开发会话在几分钟内恢复项目上下文并直接开始工作。
+> 更新时间：2026-08-17。本文用于让新的开发会话在几分钟内恢复项目上下文并直接开始工作。
 
 ## 1. 产品一句话
 
@@ -25,7 +25,7 @@
 
 ```powershell
 cd D:\Desk\拾音记\ncm-api-enhanced-main
-env:PORT="4000"; node app.js # Windows PowerShell
+$env:PORT="4000"; node app.js # Windows PowerShell
 ```
 
 确认音乐服务位于 `http://localhost:4000`，再启动 Web：
@@ -56,14 +56,27 @@ NCM_ALLOW_TRIAL=false
 NCM_AUTH_MODE=qr
 NCM_PHONE=
 NCM_MD5_PASSWORD=
+MUSIC_CREDENTIAL_ENCRYPTION_KEY=<local-only-32-byte-base64url-key>
+
+APP_ENV=development
+AUTH_EXPOSE_DEV_CODE=false
+AUTH_SESSION_DAYS=14
+EMAIL_PROVIDER=qq-smtp
+QQ_SMTP_HOST=smtp.qq.com
+QQ_SMTP_PORT=465
+QQ_SMTP_USER=<local-only>
+QQ_SMTP_AUTH_CODE=<local-only>
+EMAIL_FROM_NAME=拾音记
 ```
 
 规则：
 
 - 不在代码、文档、日志、Issue、PR 或测试快照中写入 API Key、手机号、密码、MD5 登录凭据或网易 Cookie。
 - 本地密码模式只保存 MD5 登录凭据，不保存明文密码。
-- 网易 Cookie 当前仅驻留 Web 服务进程内存，前端 API 不返回 Cookie 或网易账号 ID。
+- 网易 Cookie 使用 AES-GCM 按拾音记 `user_id` 加密后写入 `music_connections`，前端 API 不返回 Cookie 或网易账号 ID。
+- `MUSIC_CREDENTIAL_ENCRYPTION_KEY` 必须稳定保存；丢失或更换后，已有网易授权无法解密，用户需要重新扫码。
 - 手机号密码登录可能被网易云返回 `-460` 风控；不得重试轰炸或绕过，使用设置页二维码连接。
+- 当前本地环境已启用 QQ SMTP，验证码通过邮件发送且不会显示在页面；排障时才临时使用 Console Provider，生产环境始终禁止验证码回显。
 
 ## 5. 主链路
 
@@ -94,6 +107,12 @@ flowchart LR
 
 | API | 职责 |
 | --- | --- |
+| `POST /api/v1/auth/email-code` | 发送注册或登录验证码 |
+| `POST /api/v1/auth/register` | 验证邮箱、创建账号和初始画像 |
+| `POST /api/v1/auth/login/password` | 账号密码登录 |
+| `POST /api/v1/auth/login/code` | 邮箱验证码登录 |
+| `GET /api/v1/auth/session` | 读取当前安全会话 |
+| `POST /api/v1/auth/logout` | 撤销当前会话并清除 Cookie |
 | `POST /api/v1/context-sessions` | 接收文字/图片并生成结构化情境 |
 | `POST /api/v1/recommendations` | 召回、特征增强、可播放过滤和二次排序 |
 | `POST /api/v1/playback/resolve` | 按当前账号权限获取短期完整播放地址 |
@@ -135,13 +154,15 @@ git diff --check
 3. 播放解析返回非试听 `audio/*` 地址。
 4. 设置页可生成二维码，扫码后只展示喜欢数、播放画像数和曲风摘要。
 5. 高风险文本返回 `409 SAFETY_SUPPORT_REQUIRED`。
+6. 新邮箱可完成验证码注册、密码登录、验证码登录和退出，登录后画像与历史只属于当前账号。
 
 ## 9. 已知限制与下一步
 
-- 二维码 Cookie 目前仅驻留内存，服务重启后需要重新扫码；正式版本要使用应用级密钥加密后写入 `music_connections`。
+- 二维码 Cookie 已按拾音记账号加密持久化，服务重启后自动恢复；正式部署需要安全备份加密密钥。
 - 歌词与百科只增强排序窗口内的候选，并使用内存缓存；后续应迁移到有 TTL 的持久缓存。
 - 能量值没有统一官方字段，非 BPM 情况仍是启发式估算，需要建立人工标注集校准。
 - 当前用户反馈已记录，但尚未完整更新长期画像和场景画像。
+- 当前业务运行时使用 Cloudflare D1；部署到普通 VPS 前需增加 PostgreSQL 或 SQLite 适配器，详见 `docs/architecture/07-account-and-deployment.md`。
 - NCM Enhanced API 不是商业版权方案，商业化前必须替换为具备完整授权的音乐服务。
 - 下一优先级：加密音乐连接、画像同步任务、曲目特征离线缓存、推荐离线指标和 A/B 实验。
 

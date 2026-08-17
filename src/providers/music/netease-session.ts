@@ -4,12 +4,18 @@ type SessionClient = Pick<NcmApiClient, "loginWithPhone" | "createQr" | "checkQr
 
 type SessionSource = "password" | "qr";
 
-type NcmSession = {
+export type NcmSession = {
   cookie: string;
   userId: number;
   source: SessionSource;
   connectedAt: string;
 };
+
+export interface NcmSessionPersistence {
+  load(appUserId: string): Promise<NcmSession | null>;
+  save(appUserId: string, session: NcmSession): Promise<void>;
+  delete(appUserId: string): Promise<void>;
+}
 
 type SessionConfig = {
   authMode?: "none" | "password" | "qr";
@@ -29,17 +35,24 @@ export class NcmSessionManager {
   private readonly sessions = new Map<string, NcmSession>();
   private readonly pendingQr = new Map<string, string>();
   private readonly tastes = new Map<string, { expiresAt: number; value: NcmTasteProfile }>();
-  private passwordAttempt: Promise<NcmSession | null> | null = null;
+  private readonly passwordAttempts = new Map<string, Promise<NcmSession | null>>();
   private passwordFailure: string | null = null;
+  private readonly restorationAttempts = new Map<string, Promise<NcmSession | null>>();
 
-  constructor(private readonly client: SessionClient, private readonly config: SessionConfig = {}) {}
+  constructor(private readonly client: SessionClient, private readonly config: SessionConfig = {}, private readonly persistence?: NcmSessionPersistence) {}
 
   async getSession(appUserId: string) {
     const existing = this.sessions.get(appUserId);
     if (existing) return existing;
+    const restored = await this.restoreSession(appUserId);
+    if (restored) return restored;
     if (this.config.authMode !== "password" || !this.config.phone || !this.config.md5Password) return null;
-    if (!this.passwordAttempt) this.passwordAttempt = this.loginWithConfiguredAccount(appUserId);
-    return this.passwordAttempt;
+    let passwordAttempt = this.passwordAttempts.get(appUserId);
+    if (!passwordAttempt) {
+      passwordAttempt = this.loginWithConfiguredAccount(appUserId);
+      this.passwordAttempts.set(appUserId, passwordAttempt);
+    }
+    return passwordAttempt;
   }
 
   async getTaste(appUserId: string, session: NcmSession): Promise<NcmTasteProfile> {
@@ -61,7 +74,9 @@ export class NcmSessionManager {
     const result = await this.client.checkQr(key);
     if (result.code === 803 && result.cookie) {
       const account = await this.client.getLoginStatus(result.cookie);
-      this.sessions.set(appUserId, { cookie: result.cookie, userId: account.userId, source: "qr", connectedAt: new Date().toISOString() });
+      const session: NcmSession = { cookie: result.cookie, userId: account.userId, source: "qr", connectedAt: new Date().toISOString() };
+      await this.persistence?.save(appUserId, session);
+      this.sessions.set(appUserId, session);
       this.pendingQr.delete(appUserId);
       this.tastes.delete(appUserId);
     }
@@ -72,10 +87,13 @@ export class NcmSessionManager {
     return this.getStatus(appUserId, result.code === 802 ? "scanned" : undefined);
   }
 
-  disconnect(appUserId: string) {
+  async disconnect(appUserId: string) {
     this.sessions.delete(appUserId);
     this.pendingQr.delete(appUserId);
     this.tastes.delete(appUserId);
+    this.restorationAttempts.delete(appUserId);
+    this.passwordAttempts.delete(appUserId);
+    await this.persistence?.delete(appUserId);
   }
 
   async getStatus(appUserId: string, transientStatus?: "scanned"): Promise<NcmConnectionStatus> {
@@ -100,6 +118,7 @@ export class NcmSessionManager {
     try {
       const login = await this.client.loginWithPhone(this.config.phone!, this.config.md5Password!);
       const session: NcmSession = { cookie: login.cookie, userId: login.userId, source: "password", connectedAt: new Date().toISOString() };
+      await this.persistence?.save(appUserId, session);
       this.sessions.set(appUserId, session);
       return session;
     } catch (error) {
@@ -108,5 +127,18 @@ export class NcmSessionManager {
         : "本地账号连接失败，请使用二维码连接";
       return null;
     }
+  }
+
+  private async restoreSession(appUserId: string) {
+    if (!this.persistence) return null;
+    let attempt = this.restorationAttempts.get(appUserId);
+    if (!attempt) {
+      attempt = this.persistence.load(appUserId).then((session) => {
+        if (session) this.sessions.set(appUserId, session);
+        return session;
+      }).catch(() => null);
+      this.restorationAttempts.set(appUserId, attempt);
+    }
+    return attempt;
   }
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { NcmSessionManager } from "../../src/providers/music/netease-session";
+import { NcmSessionManager, type NcmSession, type NcmSessionPersistence } from "../../src/providers/music/netease-session";
 
 class FakeSessionClient {
   passwordAttempts = 0;
@@ -17,6 +17,15 @@ class FakeSessionClient {
   async getTasteProfile() {
     return { likedIds: new Set([1, 2]), playCounts: new Map([[1, 8]]), familiarArtists: new Set(["测试艺人"]), preferredGenres: ["器乐"] };
   }
+}
+
+class FakeSessionPersistence implements NcmSessionPersistence {
+  readonly values = new Map<string, NcmSession>();
+  saves = 0;
+  deletes = 0;
+  async load(appUserId: string) { return this.values.get(appUserId) ?? null; }
+  async save(appUserId: string, session: NcmSession) { this.saves += 1; this.values.set(appUserId, session); }
+  async delete(appUserId: string) { this.deletes += 1; this.values.delete(appUserId); }
 }
 
 test("password risk control degrades to QR without repeated login attempts", async () => {
@@ -59,4 +68,30 @@ test("expired QR clears the pending session with an actionable status", async ()
   const status = await sessions.checkQr("user-1", qr.key);
   assert.equal(status.status, "disconnected");
   assert.match(status.message ?? "", /过期/);
+});
+
+test("QR authorization is restored for the same app account after a service restart", async () => {
+  const client = new FakeSessionClient();
+  const persistence = new FakeSessionPersistence();
+  const firstProcess = new NcmSessionManager(client, { authMode: "qr" }, persistence);
+  const qr = await firstProcess.createQr("user-1");
+  client.qrCode = 803;
+  await firstProcess.checkQr("user-1", qr.key);
+  assert.equal(persistence.saves, 1);
+
+  const restartedProcess = new NcmSessionManager(client, { authMode: "qr" }, persistence);
+  assert.equal((await restartedProcess.getSession("user-1"))?.cookie, "MUSIC_U=server-only");
+  assert.equal(await restartedProcess.getSession("user-2"), null);
+});
+
+test("disconnect removes the persisted authorization for the current account only", async () => {
+  const client = new FakeSessionClient();
+  const persistence = new FakeSessionPersistence();
+  persistence.values.set("user-1", { cookie: "one", userId: 1, source: "qr", connectedAt: new Date().toISOString() });
+  persistence.values.set("user-2", { cookie: "two", userId: 2, source: "qr", connectedAt: new Date().toISOString() });
+  const sessions = new NcmSessionManager(client, { authMode: "qr" }, persistence);
+  await sessions.disconnect("user-1");
+  assert.equal(persistence.deletes, 1);
+  assert.equal(persistence.values.has("user-1"), false);
+  assert.equal(persistence.values.has("user-2"), true);
 });

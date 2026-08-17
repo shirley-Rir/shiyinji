@@ -83,6 +83,40 @@ export type NeteaseConnection = {
   taste: { likedCount: number; recordCount: number; preferredGenres: string[] } | null;
 };
 
+export type AuthUser = { id: string; email: string; display_name: string };
+
+export async function getAuthSession() {
+  return request<{ user: AuthUser }>("/api/v1/auth/session");
+}
+
+export async function requestAuthCode(email: string, purpose: "register" | "login") {
+  return request<{ accepted: boolean; expires_in: number; dev_code?: string }>("/api/v1/auth/email-code", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, purpose }),
+  });
+}
+
+export async function registerAccount(input: { email: string; code: string; password: string; displayName: string }) {
+  return request<{ user: AuthUser }>("/api/v1/auth/register", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: input.email, code: input.code, password: input.password, display_name: input.displayName }),
+  });
+}
+
+export async function loginWithAccountPassword(email: string, password: string) {
+  return request<{ user: AuthUser }>("/api/v1/auth/login/password", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function loginWithAccountCode(email: string, code: string) {
+  return request<{ user: AuthUser }>("/api/v1/auth/login/code", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, code }),
+  });
+}
+
+export async function logoutAccount() {
+  await request<null>("/api/v1/auth/logout", { method: "POST" });
+}
+
 type RecommendationResponse = {
   recommendation_id: string;
   context_session_id: string;

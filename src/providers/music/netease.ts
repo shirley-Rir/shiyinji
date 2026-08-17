@@ -404,6 +404,8 @@ function searchSeeds(context: StructuredContext, profile: UserProfile, accountGe
     .map((lane) => lane.query.trim());
   if (planned?.length) return [...new Set(planned)].slice(0, 4);
   const activity = context.activity ?? "";
+  const sceneTerms = specificSceneTerms(context);
+  const sceneQuery = sceneTerms.slice(0, 3).join(" ");
   const preferredGenre = accountGenres[0] ?? profile.explicit.likedGenres[0];
   const preferredArtist = profile.explicit.likedArtists[0];
   if (/学习|复习|阅读|写作|论文|工作|代码|编程/.test(activity)) {
@@ -412,9 +414,16 @@ function searchSeeds(context: StructuredContext, profile: UserProfile, accountGe
       : ["专注 音乐", `${context.targetMood[0] ?? "平静"} 轻音乐`, preferredGenre ?? "工作 音乐"];
   }
   if (/旅行|驾驶|乘车|候机|步行|跑步/.test(activity) || context.environment.some((item) => /路上|公路|机场|海边/.test(item))) {
-    return ["旅行 公路 音乐", `${context.targetMood[0] ?? "开阔"} 音乐`, preferredArtist ?? preferredGenre ?? "旅行 轻音乐"];
+    return [sceneQuery ? `${sceneQuery} 音乐` : "旅行 公路 音乐", `${context.targetMood[0] ?? "开阔"} ${activity || "旅行"} 音乐`, preferredArtist ?? preferredGenre ?? "旅行 轻音乐"];
   }
-  return [`${context.targetMood[0] ?? "平静"} 治愈`, "情绪陪伴 轻音乐", preferredArtist ?? preferredGenre ?? "放松 音乐"];
+  return [sceneQuery ? `${sceneQuery} 音乐` : `${context.targetMood[0] ?? "平静"} 治愈`, `${context.targetMood[0] ?? "平静"} ${activity || context.environment[0] || "陪伴"} 音乐`, preferredArtist ?? preferredGenre ?? "放松 音乐"];
+}
+
+function specificSceneTerms(context: StructuredContext) {
+  const generic = /^(图片情境|室内|户外|风景|环境|平静|未知|无法判断)$/;
+  return [...new Set([context.activity, ...context.environment, ...context.currentMood, ...context.targetMood]
+    .filter((value): value is string => Boolean(value?.trim()) && !generic.test(value!.trim())))]
+    .slice(0, 5);
 }
 
 function toLibraryTrackEvidence(track: NcmAccountLibraryTrack): LibraryTrackEvidence {

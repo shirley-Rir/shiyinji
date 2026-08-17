@@ -8,6 +8,7 @@ type ProviderConfig = {
   baseUrl: string;
   textModel: string;
   visionModel?: string;
+  visionFallbackModel?: string;
   thinking?: "enabled" | "disabled";
   timeoutMs?: number;
   maxRetries?: number;
@@ -31,15 +32,25 @@ export class OpenAICompatibleAIProvider implements AIProvider, RecommendationPla
 
   async interpretContext(input: ContextInput): Promise<ContextInterpretation> {
     const hasImage = Boolean(input.image?.dataUrl);
-    const model = hasImage ? this.config.visionModel : this.config.textModel;
+    let model = hasImage ? this.config.visionModel : this.config.textModel;
     if (!model) throw new Error("AI_VISION_MODEL_REQUIRED");
 
-    const raw = await this.complete(model, CONTEXT_INTERPRETER_PROMPT, userContent(input), !hasImage, 1200, 0.1);
     let parsed: ModelInterpretation;
     try {
-      parsed = modelInterpretationSchema.parse(JSON.parse(stripCodeFence(raw)));
-    } catch {
-      throw new Error("AI_PROVIDER_INVALID_RESPONSE");
+      const raw = await this.complete(model, CONTEXT_INTERPRETER_PROMPT, userContent(input), !hasImage, 1200, 0.1, hasImage ? 1 : undefined, hasImage);
+      parsed = parseInterpretation(raw);
+    } catch (error) {
+      const fallbackModel = this.config.visionFallbackModel;
+      if (!hasImage || !fallbackModel || fallbackModel === model || !isVisionFallbackError(error)) throw error;
+      console.warn("[shiyinji-ai] primary vision model unavailable; using vision fallback", {
+        provider: this.name,
+        model,
+        fallbackModel,
+        reason: safeProviderReason(error),
+      });
+      model = fallbackModel;
+      const raw = await this.complete(model, CONTEXT_INTERPRETER_PROMPT, userContent(input), false, 800, 0.1, undefined, true);
+      parsed = parseInterpretation(raw);
     }
     return {
       context: applyDeterministicGuards(toStructuredContext(parsed, sourceOf(input)), input.text),
@@ -66,38 +77,49 @@ export class OpenAICompatibleAIProvider implements AIProvider, RecommendationPla
     return guardRecommendationBrief(toRecommendationBrief(parsed, `real-ai:${this.config.textModel}`, input), input);
   }
 
-  private async complete(model: string, systemPrompt: string, content: unknown, jsonResponse: boolean, maxTokens: number, temperature: number): Promise<string> {
-    const maxRetries = this.config.maxRetries ?? 2;
+  private async complete(model: string, systemPrompt: string, content: unknown, jsonResponse: boolean, maxTokens: number, temperature: number, retryLimit?: number, multimodal = false): Promise<string> {
+    const maxRetries = Math.min(this.config.maxRetries ?? 2, retryLimit ?? Number.POSITIVE_INFINITY);
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      const response = await this.request(`${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.config.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content },
-          ],
-          ...(jsonResponse ? { response_format: { type: "json_object" } } : {}),
-          ...(this.config.thinking ? { thinking: { type: this.config.thinking } } : {}),
-          temperature,
-          max_tokens: maxTokens,
-          stream: false,
-        }),
-        signal: AbortSignal.timeout(this.config.timeoutMs ?? 30_000),
-      });
+      let response: Response;
+      try {
+        response = await this.request(`${this.config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.config.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            messages: multimodal
+              ? [{ role: "user", content: multimodalUserContent(systemPrompt, content) }]
+              : [{ role: "system", content: systemPrompt }, { role: "user", content }],
+            ...(jsonResponse ? { response_format: { type: "json_object" } } : {}),
+            ...(this.config.thinking ? { thinking: { type: this.config.thinking } } : {}),
+            temperature,
+            max_tokens: maxTokens,
+            stream: false,
+          }),
+          signal: AbortSignal.timeout(this.config.timeoutMs ?? 30_000),
+        });
+      } catch {
+        if (attempt === maxRetries) throw new Error("AI_PROVIDER_NETWORK_ERROR");
+        await delay((this.config.retryBaseMs ?? 1000) * 2 ** attempt);
+        continue;
+      }
 
-      const payload = await response.json() as ChatCompletionResponse;
+      let payload: ChatCompletionResponse;
+      try {
+        payload = await response.json() as ChatCompletionResponse;
+      } catch {
+        throw new Error(`AI_PROVIDER_ERROR:${response.status}`);
+      }
       if (response.ok) {
         const content = payload.choices?.[0]?.message?.content;
         if (!content) throw new Error("AI_PROVIDER_EMPTY_RESPONSE");
         return content;
       }
-      if (![429, 503].includes(response.status) || attempt === maxRetries) {
-        throw new Error(`AI_PROVIDER_ERROR:${response.status}:${payload.error?.message ?? "unknown"}`);
+      if (![429, 502, 503, 504].includes(response.status) || attempt === maxRetries) {
+        throw new Error(`AI_PROVIDER_ERROR:${response.status}`);
       }
       const retryAfterMs = Number(response.headers.get("retry-after") ?? 0) * 1000;
       await delay(Math.max(retryAfterMs, (this.config.retryBaseMs ?? 1000) * 2 ** attempt));
@@ -111,8 +133,21 @@ function recommendationPlannerContent(input: RecommendationPlannerInput) {
     requested_mode: input.requestedMode,
     draft_count: input.draftCount,
     context: input.context,
+    context_evidence: contextEvidence(input.context),
     profile_summary: input.profileSummary,
   });
+}
+
+function contextEvidence(context: StructuredContext) {
+  return {
+    source: context.source,
+    atmosphere: [...context.currentMood, ...context.targetMood],
+    activity: context.activity,
+    visual_environment: context.environment,
+    dynamics: { arousal: context.arousal, target_energy: context.targetEnergy, valence: context.valence },
+    transition: context.transition,
+    hard_constraints: context.hardConstraints,
+  };
 }
 
 function toRecommendationBrief(value: ModelRecommendationBrief, provider: string, input: RecommendationPlannerInput): RecommendationBrief {
@@ -196,9 +231,36 @@ function userContent(input: ContextInput) {
   const contextText = `用户输入：${text}\n用户时区：${input.timezone ?? "unknown"}`;
   if (!input.image?.dataUrl) return contextText;
   return [
+    { type: "image_url", image_url: { url: base64Image(input.image.dataUrl) } },
     { type: "text", text: contextText },
-    { type: "image_url", image_url: { url: input.image.dataUrl } },
   ];
+}
+
+function multimodalUserContent(systemPrompt: string, content: unknown) {
+  if (!Array.isArray(content)) return `${systemPrompt}\n\n${String(content)}`;
+  return content.map((item) => {
+    if (!item || typeof item !== "object" || !("type" in item) || item.type !== "text" || !("text" in item)) return item;
+    return { ...item, text: `${systemPrompt}\n\n${String(item.text)}` };
+  });
+}
+
+function base64Image(dataUrl: string) {
+  return dataUrl.replace(/^data:image\/(?:jpeg|png|webp);base64,/i, "");
+}
+
+function isVisionFallbackError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.message === "AI_PROVIDER_RETRY_EXHAUSTED"
+    || error.message === "AI_PROVIDER_NETWORK_ERROR"
+    || error.message === "AI_PROVIDER_EMPTY_RESPONSE"
+    || error.message === "AI_PROVIDER_INVALID_RESPONSE"
+    || /^AI_PROVIDER_ERROR:(429|502|503|504)$/.test(error.message);
+}
+
+function safeProviderReason(error: unknown) {
+  if (!(error instanceof Error)) return "unknown";
+  return error.message.match(/^AI_PROVIDER_ERROR:(\d{3})$/)?.[1]
+    ?? error.message.replace(/^AI_PROVIDER_/, "").toLowerCase();
 }
 
 function sourceOf(input: ContextInput): ContextSource {
@@ -233,6 +295,14 @@ function stripCodeFence(value: string) {
   return value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
 }
 
+function parseInterpretation(raw: string) {
+  try {
+    return modelInterpretationSchema.parse(JSON.parse(stripCodeFence(raw)));
+  } catch {
+    throw new Error("AI_PROVIDER_INVALID_RESPONSE");
+  }
+}
+
 function applyDeterministicGuards(context: StructuredContext, text: string): StructuredContext {
   const explicitNoLyrics = /不要歌词|无歌词|纯音乐/.test(text);
   const explicitNoLibrary = /不要.*歌单|不想听.*歌单|别放.*收藏|不要.*收藏/.test(text);
@@ -246,11 +316,13 @@ function applyDeterministicGuards(context: StructuredContext, text: string): Str
   else if (/消失算了|活着没意思|撑不下去|不如消失|没有活下去的意义/.test(text) || explicitSafetyDenial) safetyRisk = "watch";
 
   const localizedActivity = context.activity ? localizeLabel(context.activity) : null;
+  const currentMood = localizeLabels(context.currentMood).filter(isSpecificLabel);
+  const targetMood = localizeLabels(context.targetMood).filter(isSpecificLabel);
 
   return {
     ...context,
-    currentMood: localizeLabels(context.currentMood),
-    targetMood: localizeLabels(context.targetMood),
+    currentMood: currentMood.length ? currentMood : ["平静"],
+    targetMood: targetMood.length ? targetMood : currentMood.length ? currentMood.slice(0, 2) : ["平静"],
     activity: localizedActivity && !/^(null|unknown|未知)$/i.test(localizedActivity) ? localizedActivity : null,
     environment: localizeLabels(context.environment).filter((item) => !/unknown|未知/i.test(item)),
     hardConstraints: [
@@ -281,6 +353,10 @@ function localizeLabels(values: string[]) {
 
 function localizeLabel(value: string) {
   return LABEL_TRANSLATIONS[value.trim().toLowerCase()] ?? value;
+}
+
+function isSpecificLabel(value: string) {
+  return !/^(unknown|null|未知|无法判断|不确定|无)$/i.test(value.trim());
 }
 
 function delay(ms: number) {

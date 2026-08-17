@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { OpenAICompatibleAIProvider } from "../../src/providers/ai/real";
+import { ResilientContextAIProvider } from "../../src/providers/ai/resilient";
+import { MockAIProvider } from "../../src/providers/ai/mock";
 import { createDefaultProfile, createProfileSummary, type StructuredContext } from "../../src/domain";
 
 const modelOutput = {
@@ -72,8 +74,69 @@ test("vision requests use the configured vision model and multimodal content", a
   const result = await provider.interpretContext({ text: "", image: { name: "scene.png", type: "image/png", size: 4, dataUrl: "data:image/png;base64,dGVzdA==" } });
   assert.equal(result.context.source, "image");
   assert.equal(requestBody?.model, "vision-model");
-  assert.ok(Array.isArray(requestBody?.messages?.[1]?.content));
+  assert.equal(requestBody?.messages?.length, 1);
+  assert.ok(Array.isArray(requestBody?.messages?.[0]?.content));
   assert.equal("response_format" in (requestBody ?? {}), false);
+  const content = requestBody?.messages?.[0]?.content as Array<{ type?: string; text?: string; image_url?: { url?: string } }>;
+  assert.equal(content.find((item) => item.type === "image_url")?.image_url?.url, "dGVzdA==");
+  assert.match(content.find((item) => item.type === "text")?.text ?? "", /拾音记/);
+});
+
+test("vision requests use a second visual model when the primary is rate limited", async () => {
+  const requestedModels: string[] = [];
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    visionModel: "vision-primary",
+    visionFallbackModel: "vision-fallback",
+    maxRetries: 0,
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { model: string };
+      requestedModels.push(body.model);
+      return body.model === "vision-primary"
+        ? Response.json({ error: { message: "busy" } }, { status: 429 })
+        : Response.json({ choices: [{ message: { content: JSON.stringify(modelOutput) } }] });
+    },
+  });
+
+  const result = await provider.interpretContext({ text: "", image: { name: "scene.png", type: "image/png", size: 4, dataUrl: "data:image/png;base64,dGVzdA==" } });
+
+  assert.deepEqual(requestedModels, ["vision-primary", "vision-fallback"]);
+  assert.equal(result.provider, "real-ai:vision-fallback");
+  assert.equal(result.context.source, "image");
+});
+
+test("image context replaces an unknown listening target with the observed atmosphere", async () => {
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    visionModel: "vision-model",
+    fetch: async () => Response.json({ choices: [{ message: { content: JSON.stringify({ ...modelOutput, current_mood: ["开阔", "宁静"], target_mood: ["未知"], environment: ["空旷山路", "阴天"] }) } }] }),
+  });
+  const result = await provider.interpretContext({ text: "", image: { name: "road.png", type: "image/png", size: 4, dataUrl: "data:image/png;base64,dGVzdA==" } });
+  assert.deepEqual(result.context.targetMood, ["开阔", "宁静"]);
+});
+
+test("vision requests use the fallback when the primary returns malformed content", async () => {
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    visionModel: "vision-primary",
+    visionFallbackModel: "vision-fallback",
+    maxRetries: 0,
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { model: string; max_tokens: number };
+      if (body.model === "vision-primary") return Response.json({ choices: [{ message: { content: "看起来是一条公路" } }] });
+      assert.equal(body.max_tokens, 800);
+      return Response.json({ choices: [{ message: { content: JSON.stringify(modelOutput) } }] });
+    },
+  });
+
+  const result = await provider.interpretContext({ text: "", image: { name: "scene.png", type: "image/png", size: 4, dataUrl: "data:image/png;base64,dGVzdA==" } });
+  assert.equal(result.provider, "real-ai:vision-fallback");
 });
 
 test("deterministic safety guard cannot be downgraded by model output", async () => {
@@ -116,6 +179,70 @@ test("transient provider rate limits are retried", async () => {
   });
   await provider.interpretContext({ text: "准备学习" });
   assert.equal(attempts, 2);
+});
+
+test("text context falls back to local rules after a transient provider outage", async () => {
+  const primary = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    maxRetries: 0,
+    fetch: async () => Response.json({ error: { message: "busy" } }, { status: 429 }),
+  });
+  const provider = new ResilientContextAIProvider(primary, new MockAIProvider());
+
+  const result = await provider.interpretContext({ text: "准备学习，想安静专注，不要歌词" });
+
+  assert.equal(result.context.activity, "工作或学习");
+  assert.equal(result.context.lyricTolerance, "none");
+  assert.equal(result.provider, "fallback-rules:mock-ai-v1");
+});
+
+test("image-only context does not pretend to understand an image during provider outage", async () => {
+  const primary = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    visionModel: "vision-model",
+    maxRetries: 0,
+    fetch: async () => Response.json({ error: { message: "busy" } }, { status: 503 }),
+  });
+  const provider = new ResilientContextAIProvider(primary, new MockAIProvider());
+
+  await assert.rejects(
+    provider.interpretContext({ text: "", image: { name: "scene.png", type: "image/png", size: 4, dataUrl: "data:image/png;base64,dGVzdA==" } }),
+    /AI_PROVIDER_ERROR:503/,
+  );
+});
+
+test("network failures are normalized and text requests use the local fallback", async () => {
+  const primary = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    maxRetries: 0,
+    fetch: async () => { throw new TypeError("connection reset with sensitive details"); },
+  });
+  const provider = new ResilientContextAIProvider(primary, new MockAIProvider());
+
+  const result = await provider.interpretContext({ text: "在旅行路上，想听开阔一点的" });
+  assert.equal(result.context.activity, "旅行途中");
+  assert.equal(result.provider, "fallback-rules:mock-ai-v1");
+});
+
+test("malformed model output uses the local fallback for text context", async () => {
+  const primary = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    maxRetries: 0,
+    fetch: async () => Response.json({ choices: [{ message: { content: "not-json" } }] }),
+  });
+  const provider = new ResilientContextAIProvider(primary, new MockAIProvider());
+
+  const result = await provider.interpretContext({ text: "工作时想专注，不要歌词" });
+  assert.equal(result.context.lyricTolerance, "none");
+  assert.equal(result.provider, "fallback-rules:mock-ai-v1");
 });
 
 test("explicit denial keeps ambiguous distress at watch instead of high", async () => {
@@ -165,6 +292,7 @@ test("recommendation planner sends only compressed profile data and returns sear
   assert.equal(result.draftTracks.length, 9);
   assert.ok(result.draftTracks.every((track) => track.artist));
   assert.equal(requestText.includes("private-user-id"), false);
+  assert.equal(requestText.includes("context_evidence"), true);
 });
 
 function modelContext(): StructuredContext {
