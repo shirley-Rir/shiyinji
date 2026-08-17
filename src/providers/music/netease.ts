@@ -256,7 +256,7 @@ export class NeteaseMusicProvider implements MusicProvider {
     if (id === null) throw new Error("TRACK_NOT_PLAYABLE");
     const session = connectionId ? await this.sessions?.getSession(connectionId) ?? null : null;
     const playback = await this.client.getPlayback(id, this.config.playbackLevel ?? "standard", session?.cookie);
-    if (!playback.url || (playback.freeTrialInfo && !this.config.allowTrial)) throw new Error("TRACK_NOT_PLAYABLE");
+    if (playback.id !== id || !playback.url || (playback.freeTrialInfo && !this.config.allowTrial)) throw new Error("TRACK_NOT_PLAYABLE");
     return {
       id: `ph_${crypto.randomUUID()}`,
       trackId,

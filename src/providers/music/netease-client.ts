@@ -100,7 +100,7 @@ export class NcmApiClient implements NcmClient {
   async getPlayback(id: number, level: string, cookie?: string) {
     const payload = await this.call<{ code: number; data?: NcmPlayback[] }>("/song/url/v1", { id: String(id), level, unblock: "false", timestamp: String(Date.now()) }, cookie);
     const playback = payload.data?.[0];
-    if (!playback) throw new Error("TRACK_NOT_PLAYABLE");
+    if (!playback || playback.id !== id) throw new Error("TRACK_NOT_PLAYABLE");
     return playback;
   }
 
@@ -269,6 +269,7 @@ export class NcmApiClient implements NcmClient {
     const url = new URL(pathname, ensureTrailingSlash(this.baseUrl));
     const requestParams = { ...params, ...(cookie ? { cookie } : {}) };
     if (method === "GET") for (const [key, value] of Object.entries(requestParams)) url.searchParams.set(key, value);
+    else url.searchParams.set("_shiyinji_nonce", crypto.randomUUID());
     for (let attempt = 0; attempt <= requestMaxRetries; attempt += 1) {
       try {
         const response = await this.request(url, {

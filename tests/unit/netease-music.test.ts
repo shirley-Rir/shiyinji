@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createDefaultProfile, type RecommendationBrief, type StructuredContext } from "../../src/domain";
 import { NeteaseMusicProvider, parseNcmLyrics } from "../../src/providers/music/netease";
-import type { NcmClient, NcmPlayback, NcmPrivilege, NcmSong } from "../../src/providers/music/netease-client";
+import { NcmApiClient, type NcmClient, type NcmPlayback, type NcmPrivilege, type NcmSong } from "../../src/providers/music/netease-client";
 
 const context: StructuredContext = {
   source: "text", requestIntent: "recommendation", directPlay: null, currentMood: ["分心"], targetMood: ["专注"], activity: "学习", environment: ["室内"], socialState: "alone",
@@ -88,8 +88,31 @@ test("Netease provider resolves full playback and rejects trial-only URLs", asyn
   const playback = await provider.resolvePlayback("netease:101");
   assert.equal(playback.mimeType, "audio/mpeg");
   assert.equal(playback.url, "https://m801.music.126.net/101.mp3");
+  client.playback = { ...client.playback, id: 102 };
+  await assert.rejects(() => provider.resolvePlayback("netease:101"), /TRACK_NOT_PLAYABLE/);
+  client.playback = { ...client.playback, id: 101 };
   client.playback = { ...client.playback, freeTrialInfo: { start: 0, end: 30 } };
   await assert.rejects(() => provider.resolvePlayback("netease:101"), /TRACK_NOT_PLAYABLE/);
+});
+
+test("authenticated Netease POST requests bypass URL-only response caches", async () => {
+  const cache = new Map<string, string>();
+  const urls: string[] = [];
+  const client = new NcmApiClient("http://ncm.test", async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    const cached = cache.get(url);
+    if (cached) return new Response(cached, { headers: { "Content-Type": "application/json" } });
+    const body = JSON.parse(String(init?.body)) as { id: string; cookie: string };
+    const payload = JSON.stringify({ code: 200, data: [{ id: Number(body.id), url: `http://music.test/${body.id}.mp3`, freeTrialInfo: null }] });
+    cache.set(url, payload);
+    return new Response(payload, { headers: { "Content-Type": "application/json" } });
+  });
+
+  assert.equal((await client.getPlayback(316100, "standard", "MUSIC_U=secret")).id, 316100);
+  assert.equal((await client.getPlayback(28285910, "standard", "MUSIC_U=secret")).id, 28285910);
+  assert.notEqual(urls[0], urls[1]);
+  assert.equal(urls.some((url) => url.includes("MUSIC_U")), false);
 });
 
 test("Netease lyrics parser builds a translated millisecond timeline", () => {
