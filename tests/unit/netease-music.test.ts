@@ -83,9 +83,11 @@ test("Netease provider derives account familiarity before second-stage ranking",
 
 test("Netease provider resolves full playback and rejects trial-only URLs", async () => {
   const client = new FakeNcmClient();
+  client.playback = { ...client.playback, url: "http://m801.music.126.net/101.mp3" };
   const provider = new NeteaseMusicProvider(client, { playbackLevel: "standard", allowTrial: false });
   const playback = await provider.resolvePlayback("netease:101");
   assert.equal(playback.mimeType, "audio/mpeg");
+  assert.equal(playback.url, "https://m801.music.126.net/101.mp3");
   client.playback = { ...client.playback, freeTrialInfo: { start: 0, end: 30 } };
   await assert.rejects(() => provider.resolvePlayback("netease:101"), /TRACK_NOT_PLAYABLE/);
 });

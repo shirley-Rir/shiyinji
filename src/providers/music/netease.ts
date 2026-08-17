@@ -260,7 +260,7 @@ export class NeteaseMusicProvider implements MusicProvider {
     return {
       id: `ph_${crypto.randomUUID()}`,
       trackId,
-      url: playback.url,
+      url: securePlaybackUrl(playback.url),
       mimeType: playback.type ? `audio/${playback.type === "mp3" ? "mpeg" : playback.type}` : "audio/mpeg",
       expiresAt: new Date(Date.now() + Math.max(60, playback.expi ?? 600) * 1000).toISOString(),
     };
@@ -283,6 +283,12 @@ export class NeteaseMusicProvider implements MusicProvider {
     this.evidenceCache.set(song.id, { value, expiresAt: Date.now() + 6 * 60 * 60 * 1000 });
     return value;
   }
+}
+
+function securePlaybackUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol === "http:") url.protocol = "https:";
+  return url.toString();
 }
 
 export function parseNcmLyrics(trackId: string, payload: NcmLyric): TrackLyrics {

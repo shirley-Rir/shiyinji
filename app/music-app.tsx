@@ -158,7 +158,13 @@ export function MusicApp() {
     const audio = audioRef.current;
     if (!audio) return;
     if (isPlaying) {
-      audio.play().catch(() => setIsPlaying(false));
+      audio.play().catch((playError: unknown) => {
+        if (playError instanceof DOMException && playError.name === "AbortError") return;
+        setIsPlaying(false);
+        setError(playError instanceof DOMException && playError.name === "NotAllowedError"
+          ? "浏览器阻止了自动播放，请点击播放按钮。"
+          : "音频加载失败，请尝试其他歌曲。");
+      });
     } else {
       audio.pause();
     }
@@ -500,6 +506,7 @@ export function MusicApp() {
                         preload="metadata"
                         onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime)}
                         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
+                        onError={() => { setIsPlaying(false); setError("音频资源加载失败，请尝试其他歌曲。"); }}
                         onPlay={() => { if (recommendationId) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "started" }); }}
                         onPause={() => { if (recommendationId && progress > 0) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "paused", positionMs: Math.round(progress * 1000) }); }}
                         onEnded={() => { if (recommendationId) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "completed", positionMs: currentTrack.durationMs }); nextTrack(); }}
