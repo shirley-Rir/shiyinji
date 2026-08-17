@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 type BoundStatement = {
   bind(...values: unknown[]): BoundStatement;
@@ -12,32 +12,34 @@ type BoundStatement = {
 
 class NodeD1Statement implements BoundStatement {
   constructor(
-    private readonly statement: StatementSync,
+    private readonly database: DatabaseSync,
+    private readonly query: string,
     private readonly values: SQLInputValue[] = [],
   ) {}
 
   bind(...values: unknown[]) {
-    return new NodeD1Statement(this.statement, values as SQLInputValue[]);
+    return new NodeD1Statement(this.database, this.query, values as SQLInputValue[]);
   }
 
   async first<T = Record<string, unknown>>(column?: string): Promise<T | null> {
-    const row = this.statement.get(...this.values) as Record<string, unknown> | undefined;
+    const row = this.database.prepare(this.query).get(...this.values) as Record<string, unknown> | undefined;
     if (!row) return null;
     return (column ? row[column] : row) as T;
   }
 
   async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-    return result(this.statement.all(...this.values) as T[]);
+    return result(this.database.prepare(this.query).all(...this.values) as T[]);
   }
 
   async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-    const changes = this.statement.run(...this.values);
+    const changes = this.database.prepare(this.query).run(...this.values);
     return result<T>([], Number(changes.changes), Number(changes.lastInsertRowid));
   }
 
   async raw<T = unknown[]>(): Promise<T[]> {
-    const columns = this.statement.columns().map((column) => column.name);
-    const rows = this.statement.all(...this.values) as Array<Record<string, unknown>>;
+    const statement = this.database.prepare(this.query);
+    const columns = statement.columns().map((column) => column.name);
+    const rows = statement.all(...this.values) as Array<Record<string, unknown>>;
     return rows.map((row) => columns.map((column) => row[column]) as T);
   }
 }
@@ -52,7 +54,7 @@ class NodeD1Database {
   }
 
   prepare(query: string): BoundStatement {
-    return new NodeD1Statement(this.database.prepare(query));
+    return new NodeD1Statement(this.database, query);
   }
 
   async batch<T = unknown>(statements: BoundStatement[]): Promise<Array<D1Result<T>>> {
