@@ -1,8 +1,28 @@
 import { z } from "zod";
 
+const email = z.string().trim().toLowerCase().email().max(254);
+const verificationCode = z.string().regex(/^\d{6}$/, "请输入 6 位验证码");
+const password = z.string().min(8, "密码至少需要 8 位").max(128);
+
+export const requestEmailCodeRequest = z.object({
+  email,
+  purpose: z.enum(["register", "login"]),
+});
+
+export const registerRequest = z.object({
+  email,
+  code: verificationCode,
+  password,
+  display_name: z.string().trim().min(1).max(40),
+});
+
+export const passwordLoginRequest = z.object({ email, password });
+export const codeLoginRequest = z.object({ email, code: verificationCode });
+
 export const recommendationRequest = z.object({
   context_session_id: z.string().min(5),
   mode: z.enum(["autoplay", "manual"]).default("autoplay"),
+  discovery_mode: z.enum(["auto", "familiar", "balanced", "explore"]).default("auto"),
   count: z.number().int().min(1).max(10).default(5),
 });
 

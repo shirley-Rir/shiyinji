@@ -1,6 +1,7 @@
-import type { ContextInterpretation, RankedTrack, StructuredContext, TrackCandidate, UserProfile } from "@/src/domain";
+import type { AccountMusicProfile, AccountMusicProfileSyncSnapshot, ContextInterpretation, RankedTrack, StructuredContext, TrackCandidate, TrackTasteFeatures, UserProfile } from "@/src/domain";
 
 export type AppUser = { id: string; email: string; displayName: string };
+export type StoredMusicConnection = { encryptedCredential: string; credentialExpiresAt: string | null };
 
 export type StoredContextSession = {
   id: string;
@@ -24,6 +25,12 @@ export interface ShiyinjiRepository {
   ensureUser(user: AppUser): Promise<UserProfile>;
   getProfile(userId: string): Promise<UserProfile>;
   updateProfile(userId: string, patch: Partial<Pick<UserProfile, "explicit" | "personalizationEnabled">>): Promise<UserProfile>;
+  getAccountMusicProfile(userId: string): Promise<AccountMusicProfile | null>;
+  saveAccountMusicProfile(userId: string, snapshot: AccountMusicProfileSyncSnapshot): Promise<AccountMusicProfile>;
+  getTrackTasteFeatures(provider: string, providerTrackIds: string[]): Promise<TrackTasteFeatures[]>;
+  getMusicConnection(userId: string, provider: string): Promise<StoredMusicConnection | null>;
+  saveMusicConnection(userId: string, provider: string, encryptedCredential: string, credentialExpiresAt?: string | null): Promise<void>;
+  deleteMusicConnection(userId: string, provider: string): Promise<void>;
   createContextSession(userId: string, inputText: string, imageMetadata: object | null, interpretation: ContextInterpretation): Promise<StoredContextSession>;
   getContextSession(userId: string, sessionId: string): Promise<StoredContextSession | null>;
   saveTracks(candidates: TrackCandidate[]): Promise<void>;

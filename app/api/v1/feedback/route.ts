@@ -5,7 +5,7 @@ import { feedbackRequest } from "@/src/server/request";
 
 export async function POST(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const payload = feedbackRequest.parse(await request.json());
     const recommendation = await repository.getRecommendation(user.id, payload.recommendation_id);

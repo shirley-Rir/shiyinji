@@ -30,6 +30,19 @@ sequenceDiagram
 
 ## 2. 文本与图片推荐
 
+输入首先经过确定性意图路由。明确的“播放/放首/想听 + 歌名”进入点歌链路；“放首安静的歌”等描述性输入继续进入情境推荐。
+
+```mermaid
+flowchart LR
+    INPUT[文本或图文输入] --> ROUTER{意图路由}
+    ROUTER -->|direct_play| EXACT[歌名/歌手/版本严格搜索]
+    EXACT --> CHECK[同名歧义与可播放校验]
+    CHECK --> ONE[单曲直接播放]
+    ROUTER -->|recommendation| AI[情境语义理解]
+    AI --> PLAN[画像推荐策划]
+    PLAN --> TOP5[Top 1 + 4 首备选]
+```
+
 ```mermaid
 sequenceDiagram
     actor U as 用户
@@ -43,7 +56,8 @@ sequenceDiagram
 
     U->>WEB: 输入文字并可选上传图片
     WEB->>CTX: 创建情境会话
-    CTX->>AI: 文本和临时图片
+    CTX->>CTX: 点歌/推荐意图路由
+    CTX->>AI: 仅推荐意图发送文本和临时图片
     AI-->>CTX: 结构化情境与置信度
     CTX->>DB: 保存结构化结果
     CTX-->>WEB: 情境标签或一个追问
@@ -57,6 +71,8 @@ sequenceDiagram
     REC-->>WEB: Top 1 与四首备选
     WEB->>MUSIC: 解析 Top 1 播放句柄
     MUSIC-->>WEB: 临时播放地址
+    WEB->>MUSIC: 异步读取歌词时间轴
+    MUSIC-->>WEB: LRC 原文与翻译行
     WEB-->>U: 开始播放
 ```
 
@@ -111,16 +127,16 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     UPLOAD[浏览器上传] --> VALIDATE[类型与大小校验]
-    VALIDATE --> TEMP[临时对象存储]
-    TEMP --> AI[多模态理解]
-    AI --> TAGS[保存结构化标签]
-    TAGS --> PURGE[删除原图]
-    TEMP -. 超时任务 .-> PURGE
+    VALIDATE --> API[拾音记服务端]
+    API --> COS[私有 Tencent COS]
+    COS --> SIGN[生成短时签名读取链接]
+    SIGN --> AI[多模态理解]
+    AI --> TAGS[保存结构化标签与对象键]
 ```
 
-- 默认不把图片写入用户历史。
-- 调试环境保存原图必须单独征得同意，并设置到期时间。
-- 图片哈希只用于去重和审计，不能被用作跨产品追踪标识。
+- 原图保存在私有 COS；数据库不保存可访问链接，只保存对象键和必要元数据。
+- 视觉模型仅接收短时签名读取链接，默认有效期 10 分钟。
+- 原图留存、用户删除入口和生命周期规则见 `08-context-image-storage.md`；在规则上线前不得把“不会长期保存”作为前端承诺。
 
 ## 6. 音乐账号连接
 

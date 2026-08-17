@@ -12,17 +12,22 @@ import {
   Home,
   ImagePlus,
   ListMusic,
+  LogOut,
   MapPin,
   Music2,
   Pause,
+  Pencil,
   Play,
+  Plus,
   RotateCcw,
+  RefreshCw,
   Settings,
   Shield,
   SkipBack,
   SkipForward,
   SlidersHorizontal,
   Sparkles,
+  Save,
   ThumbsDown,
   Trash2,
   Unplug,
@@ -31,12 +36,15 @@ import {
   X,
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { adjustRecommendation, createContextRecommendation, getHistory, getProfile, recordPlayback, resolvePlayback, sendFeedback, updatePrivacy, type ApiContext, type ApiProfile, type ApiTrack } from "@/src/client/api";
+import { adjustRecommendation, checkNeteaseQr, createContextRecommendation, createNeteaseQr, disconnectNetease, getAuthSession, getHistory, getNeteaseConnection, getProfile, getTrackLyrics, logoutAccount, recordPlayback, resolvePlayback, sendFeedback, syncMusicProfile, updatePrivacy, updateProfile, type ApiContext, type ApiProfile, type ApiTrack, type ApiTrackLyrics, type AuthUser, type NeteaseConnection } from "@/src/client/api";
+import { validateContextImage } from "@/src/client/image";
+import { AuthScreen } from "./auth-screen";
 
 type View = "listen" | "history" | "profile" | "settings";
 
 type Track = {
   id: string;
+  provider: string;
   title: string;
   artist: string;
   duration: string;
@@ -60,6 +68,8 @@ const QUICK_SCENES = [
   { label: "有点低落", icon: CloudSun, text: "今天有点低落，不想被强行打气，只想有人安静陪一会儿。" },
 ];
 
+const INITIAL_QUERY = "刚结束一天的工作，脑子还有点乱。想慢慢安静下来，但不要太伤感。";
+
 function formatTime(value: number) {
   if (!Number.isFinite(value)) return "0:00";
   const minutes = Math.floor(value / 60);
@@ -68,6 +78,9 @@ function formatTime(value: number) {
 }
 
 function contextLabels(context: ApiContext) {
+  if (context.request_intent === "direct_play" && context.direct_play) {
+    return ["点歌", context.direct_play.title, context.direct_play.artist].filter((value): value is string => Boolean(value));
+  }
   return Array.from(new Set([
     ...context.current_mood,
     ...context.target_mood,
@@ -79,6 +92,7 @@ function contextLabels(context: ApiContext) {
 function mapApiTracks(tracks: ApiTrack[]): Track[] {
   return tracks.map((track) => ({
     id: track.track_id,
+    provider: track.provider,
     title: track.title,
     artist: track.artist,
     duration: formatTime(track.duration_ms / 1000),
@@ -101,8 +115,9 @@ function Cover({ variant, small = false }: { variant: string; small?: boolean })
 }
 
 export function MusicApp() {
+  const [authUser, setAuthUser] = useState<AuthUser | null | undefined>(undefined);
   const [view, setView] = useState<View>("listen");
-  const [query, setQuery] = useState("刚结束一天的工作，脑子还有点乱。想慢慢安静下来，但不要太伤感。");
+  const [query, setQuery] = useState(INITIAL_QUERY);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageName, setImageName] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -111,6 +126,7 @@ export function MusicApp() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [recommendationId, setRecommendationId] = useState<string | null>(null);
   const [context, setContext] = useState<string[]>([]);
+  const [requestIntent, setRequestIntent] = useState<ApiContext["request_intent"]>("recommendation");
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [liked, setLiked] = useState(false);
@@ -120,26 +136,67 @@ export function MusicApp() {
   const [hasRecommendation, setHasRecommendation] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [lyrics, setLyrics] = useState<ApiTrackLyrics | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const lyricsRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const bootstrapped = useRef(false);
+  const recommendationRequestRef = useRef(0);
+  const selectionRequestRef = useRef(0);
   const currentTrack = tracks[currentIndex];
+  const currentLyrics = lyrics?.track_id === currentTrack?.id ? lyrics : null;
+  const lyricsLoading = Boolean(currentTrack?.id && !currentLyrics);
+  const activeLyricIndex = currentLyrics?.synced
+    ? currentLyrics.lines.reduce((active, line, index) => line.time_ms !== null && line.time_ms <= progress * 1000 + 180 ? index : active, -1)
+    : -1;
+
+  useEffect(() => {
+    let active = true;
+    getAuthSession().then((result) => { if (active) setAuthUser(result.user); }).catch(() => { if (active) setAuthUser(null); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.load();
+    setProgress(0);
+    setDuration(0);
+  }, [recommendationId, currentTrack?.id, currentTrack?.source]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     if (isPlaying) {
-      audio.play().catch(() => setIsPlaying(false));
+      audio.play().catch((playError: unknown) => {
+        if (playError instanceof DOMException && playError.name === "AbortError") return;
+        setIsPlaying(false);
+        setError(playError instanceof DOMException && playError.name === "NotAllowedError"
+          ? "浏览器阻止了自动播放，请点击播放按钮。"
+          : "音频加载失败，请尝试其他歌曲。");
+      });
     } else {
       audio.pause();
     }
   }, [isPlaying, currentIndex, currentTrack?.source]);
 
   useEffect(() => {
-    if (bootstrapped.current) return;
-    bootstrapped.current = true;
-    void runRecommendation(query, null);
-  }, []);
+    if (!currentTrack?.id) return;
+    let active = true;
+    getTrackLyrics(currentTrack.id)
+      .then((result) => { if (active) setLyrics(result); })
+      .catch(() => { if (active) setLyrics({ track_id: currentTrack.id, synced: false, lines: [] }); });
+    return () => { active = false; };
+  }, [currentTrack?.id]);
+
+  useEffect(() => {
+    if (activeLyricIndex < 0 || !lyricsRef.current) return;
+    const line = lyricsRef.current.querySelector<HTMLElement>(`[data-lyric-index="${activeLyricIndex}"]`);
+    if (!line) return;
+    const top = line.offsetTop - lyricsRef.current.clientHeight / 2 + line.clientHeight / 2;
+    lyricsRef.current.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [activeLyricIndex]);
 
   useEffect(() => {
     return () => {
@@ -157,32 +214,60 @@ export function MusicApp() {
   }
 
   async function runRecommendation(text: string, image: File | null) {
+    const requestId = ++recommendationRequestRef.current;
+    selectionRequestRef.current += 1;
+    audioRef.current?.pause();
     try {
       setError("");
       setIsLoading(true);
       setIsPlaying(false);
+      setLyrics(null);
       const result = await createContextRecommendation(text, image);
-      setTracks(mapApiTracks(result.recommendation.tracks));
+      if (requestId !== recommendationRequestRef.current) return;
+      const mappedTracks = mapApiTracks(result.recommendation.tracks);
+      if (result.context.context.request_intent === "direct_play" && mappedTracks[0]) {
+        const playback = await resolvePlayback(result.recommendation.recommendation_id, mappedTracks[0].id);
+        if (requestId !== recommendationRequestRef.current) return;
+        if (playback.track_id !== mappedTracks[0].id) throw new Error("播放资源与所选歌曲不一致，请重试。");
+        mappedTracks[0] = { ...mappedTracks[0], source: playback.url };
+      }
+      setTracks(mappedTracks);
       setRecommendationId(result.recommendation.recommendation_id);
       setContext(contextLabels(result.context.context));
+      setRequestIntent(result.context.context.request_intent);
       setCurrentIndex(0);
       setHasRecommendation(true);
       setProgress(0);
+      setDuration(0);
+      setIsPlaying(result.context.context.request_intent === "direct_play");
     } catch (requestError) {
+      if (requestId !== recommendationRequestRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "这次推荐没有接住，请稍后重试。");
     } finally {
-      setIsLoading(false);
+      if (requestId === recommendationRequestRef.current) setIsLoading(false);
     }
   }
 
-  function handleImage(event: ChangeEvent<HTMLInputElement>) {
+  useEffect(() => {
+    if (!authUser || bootstrapped.current) return;
+    bootstrapped.current = true;
+    void runRecommendation(INITIAL_QUERY, null);
+  }, [authUser]);
+
+  async function handleImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    setImageUrl(URL.createObjectURL(file));
-    setImageName(file.name);
-    setImageFile(file);
-    setError("");
+    try {
+      const prepared = validateContextImage(file);
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      setImageUrl(URL.createObjectURL(prepared));
+      setImageName(file.name);
+      setImageFile(prepared);
+      setError("");
+    } catch {
+      setError("请选择不超过 25MB 的 JPEG、PNG 或 WebP 图片。");
+      if (fileRef.current) fileRef.current.value = "";
+    }
   }
 
   function removeImage() {
@@ -196,6 +281,10 @@ export function MusicApp() {
   async function selectTrack(index: number, autoPlay = true) {
     const selected = tracks[index];
     if (!selected || !recommendationId) return;
+    const requestId = ++selectionRequestRef.current;
+    audioRef.current?.pause();
+    setIsPlaying(false);
+    setError("");
     try {
       if (currentTrack && currentTrack.id !== selected.id) {
         void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "skipped", positionMs: Math.round(progress * 1000) });
@@ -203,15 +292,20 @@ export function MusicApp() {
       let source = selected.source;
       if (!source) {
         const playback = await resolvePlayback(recommendationId, selected.id);
+        if (requestId !== selectionRequestRef.current) return;
+        if (playback.track_id !== selected.id) throw new Error("播放资源与所选歌曲不一致，请重试。");
         source = playback.url;
         setTracks((current) => current.map((track, trackIndex) => trackIndex === index ? { ...track, source } : track));
       }
+      if (requestId !== selectionRequestRef.current) return;
       setCurrentIndex(index);
       setProgress(0);
+      setDuration(0);
       setLiked(false);
       setDisliked(false);
       setIsPlaying(autoPlay);
     } catch (requestError) {
+      if (requestId !== selectionRequestRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "这首歌暂时无法播放");
     }
   }
@@ -250,19 +344,42 @@ export function MusicApp() {
   async function handleDirection(label: string) {
     setFeedback(label);
     if (!recommendationId || !currentTrack) return;
+    const requestId = ++recommendationRequestRef.current;
+    selectionRequestRef.current += 1;
+    audioRef.current?.pause();
+    setIsPlaying(false);
     const directionByLabel: Record<string, string> = { "更安静": "quieter", "更有劲": "more_energy", "更熟悉": "more_familiar", "更新鲜": "more_fresh" };
     try {
       await sendFeedback({ recommendationId, trackId: currentTrack.id, type: "direction", scope: "current_context", direction: directionByLabel[label] });
+      if (requestId !== recommendationRequestRef.current) return;
       const adjusted = await adjustRecommendation(recommendationId, directionByLabel[label]);
-      setIsPlaying(false);
+      if (requestId !== recommendationRequestRef.current) return;
       setTracks(mapApiTracks(adjusted.tracks));
       setRecommendationId(adjusted.recommendation_id);
       setCurrentIndex(0);
       setProgress(0);
     } catch (requestError) {
+      if (requestId !== recommendationRequestRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "方向反馈暂时没有保存");
     }
   }
+
+  async function signOut() {
+    recommendationRequestRef.current += 1;
+    selectionRequestRef.current += 1;
+    audioRef.current?.pause();
+    setIsPlaying(false);
+    await logoutAccount().catch(() => undefined);
+    bootstrapped.current = false;
+    setAuthUser(null);
+    setHasRecommendation(false);
+    setTracks([]);
+  }
+
+  if (authUser === undefined) return <div className="auth-loading"><Music2 size={24} /><span>拾音记</span></div>;
+  if (!authUser) return <AuthScreen onAuthenticated={setAuthUser} />;
+
+  const userInitials = authUser.display_name.trim().slice(0, 2).toUpperCase() || "拾";
 
   return (
     <div className="app-shell">
@@ -285,7 +402,7 @@ export function MusicApp() {
             );
           })}
         </nav>
-        <button className="avatar" onClick={() => setView("profile")} aria-label="打开个人画像">LY</button>
+        <button className="avatar" onClick={() => setView("profile")} aria-label="打开个人画像" title={authUser.email}>{userInitials}</button>
       </aside>
 
       <main className="main-area">
@@ -295,11 +412,15 @@ export function MusicApp() {
             <span>拾音记</span>
             <span className="version">DEMO V1</span>
           </div>
-          <button className="provider-status" onClick={() => setView("settings")}>
-            <span className="status-dot" />
-            演示曲库
-            <ChevronRight size={15} />
-          </button>
+          <div className="topbar-actions">
+            <button className="provider-status" onClick={() => setView("settings")}>
+              <span className="status-dot" />
+              {tracks[0]?.provider === "netease" ? "网易云曲库" : "演示曲库"}
+              <ChevronRight size={15} />
+            </button>
+            <span className="account-name">{authUser.display_name}</span>
+            <button className="icon-action" onClick={() => void signOut()} aria-label="退出登录" title="退出登录"><LogOut size={17} /></button>
+          </div>
         </header>
 
         {view === "listen" && (
@@ -333,6 +454,8 @@ export function MusicApp() {
                 />
                 {imageUrl && (
                   <div className="image-preview">
+                    {/* Object URLs are already compressed locally and cannot use a remote image loader. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={imageUrl} alt="用户上传的情境预览" />
                     <div>
                       <strong>{imageName}</strong>
@@ -343,12 +466,12 @@ export function MusicApp() {
                 )}
                 {error && <p className="form-error" role="alert">{error}</p>}
                 <div className="composer-actions">
-                  <input ref={fileRef} type="file" accept="image/*" onChange={handleImage} hidden />
+                  <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleImage} hidden />
                   <button className="image-button" type="button" onClick={() => fileRef.current?.click()}>
                     <ImagePlus size={18} />
                     加一张照片
                   </button>
-                  <span className="privacy-note"><Shield size={14} /> 原图不会长期保存</span>
+                  <span className="privacy-note"><Shield size={14} /> 仅用于本次情境理解</span>
                   <button className="listen-button" type="submit" disabled={isLoading}>
                     {isLoading ? <><span className="loading-dot" /> 正在理解</> : <><Sparkles size={18} /> 开始听</>}
                   </button>
@@ -391,12 +514,37 @@ export function MusicApp() {
                         </div>
                       </div>
 
+                      <section className="lyrics-panel" aria-label="歌词">
+                        <div className="lyrics-heading"><span>歌词</span><Music2 size={15} /></div>
+                        <div className="lyrics-scroll" ref={lyricsRef}>
+                          {lyricsLoading && <p className="lyrics-empty">歌词读取中...</p>}
+                          {!lyricsLoading && !currentLyrics?.lines.length && <p className="lyrics-empty">纯音乐或暂无歌词</p>}
+                          {!lyricsLoading && currentLyrics?.lines.map((line, index) => (
+                            <button
+                              type="button"
+                              key={`${line.time_ms ?? "plain"}-${index}`}
+                              data-lyric-index={index}
+                              className={`lyric-line ${index === activeLyricIndex ? "is-active" : ""}`}
+                              onClick={() => { if (line.time_ms !== null) seek(line.time_ms / 1000); }}
+                              disabled={line.time_ms === null}
+                            >
+                              <span>{line.text}</span>
+                              {line.translation && <small>{line.translation}</small>}
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+
+                      {/* Music playback has no equivalent caption track. */}
+                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <audio
+                        key={`${recommendationId}:${currentTrack.id}:${currentTrack.source ?? "pending"}`}
                         ref={audioRef}
                         src={currentTrack.source}
                         preload="metadata"
                         onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime)}
                         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
+                        onError={() => { setIsPlaying(false); setError("音频资源加载失败，请尝试其他歌曲。"); }}
                         onPlay={() => { if (recommendationId) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "started" }); }}
                         onPause={() => { if (recommendationId && progress > 0) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "paused", positionMs: Math.round(progress * 1000) }); }}
                         onEnded={() => { if (recommendationId) void recordPlayback({ recommendationId, trackId: currentTrack.id, eventType: "completed", positionMs: currentTrack.durationMs }); nextTrack(); }}
@@ -424,7 +572,7 @@ export function MusicApp() {
 
                     <aside className="alternatives" aria-labelledby="alternatives-title">
                       <div className="panel-title">
-                        <div><p>不只一个答案</p><h3 id="alternatives-title">也可以听这些</h3></div>
+                        <div><p>{requestIntent === "direct_play" ? "精准点歌" : "不只一个答案"}</p><h3 id="alternatives-title">{requestIntent === "direct_play" ? "本次播放" : "也可以听这些"}</h3></div>
                         <ListMusic size={19} />
                       </div>
                       <div className="track-list">
@@ -448,20 +596,20 @@ export function MusicApp() {
 
                   <div className="feedback-bar">
                     <div className="feedback-question">
-                      <span>这一首，贴近你此刻吗？</span>
+                      <span>{requestIntent === "direct_play" ? "是你想听的版本吗？" : "这一首，贴近你此刻吗？"}</span>
                       <button className={liked ? "selected positive" : ""} onClick={() => void handlePreference("like")}><Heart size={17} fill={liked ? "currentColor" : "none"} /> 喜欢</button>
                       <button className={disliked ? "selected negative" : ""} onClick={() => void handlePreference("dislike")}><ThumbsDown size={17} /> 不太对</button>
                     </div>
-                    <div className="direction-feedback" aria-label="调整推荐方向">
+                    {requestIntent === "recommendation" && <div className="direction-feedback" aria-label="调整推荐方向">
                       {[
                         "更安静",
                         "更有劲",
                         "更熟悉",
                         "更新鲜",
                       ].map((item) => <button key={item} className={feedback === item ? "selected" : ""} onClick={() => void handleDirection(item)}>{feedback === item && <Check size={13} />}{item}</button>)}
-                    </div>
+                    </div>}
                   </div>
-                  <p className="audio-disclaimer">当前为界面与推荐闭环演示，音频来自开放示例源；网易云账号与完整曲库尚未接入。</p>
+                  <p className="audio-disclaimer">完整播放取决于当前网易云账号与曲目版权；不可播放或仅可试听的版本会被自动跳过。</p>
                 </>
               ) : null}
             </section>
@@ -508,38 +656,194 @@ function HistoryView({ onReplay }: { onReplay: () => void }) {
 
 function ProfileView() {
   const [profile, setProfile] = useState<ApiProfile | null>(null);
-  useEffect(() => { getProfile().then((result) => setProfile(result.profile)); }, []);
-  const familiarity = Math.round((profile?.explicit.familiarityBias ?? 0.5) * 100);
-  const traits = profile?.long_term_traits ?? [];
-  const preferenceTags = profile ? [...profile.explicit.languages, ...profile.explicit.likedGenres] : [];
+  const [draft, setDraft] = useState<ApiProfile["explicit"] | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [editError, setEditError] = useState("");
+  useEffect(() => { getProfile().then((result) => { setProfile(result.profile); setDraft(cloneExplicit(result.profile.explicit)); }); }, []);
+  const musicProfile = profile?.music_profile;
+  const familiarity = Math.round((profile?.explicit.familiarityBias ?? (1 - (musicProfile?.diversity.noveltyTolerance ?? 0.5))) * 100);
+  const topGenres = musicProfile?.genres.slice(0, 3).map((item) => item.value) ?? profile?.explicit.likedGenres ?? [];
+  const preferenceTags = [...new Set([
+    ...(profile?.explicit.likedGenres ?? []),
+    ...(profile?.explicit.languages ?? []),
+    ...(musicProfile?.genres.slice(0, 5).map((item) => item.value) ?? []),
+    ...(musicProfile?.languages.slice(0, 2).map((item) => item.value) ?? []),
+    ...(musicProfile?.lyric_themes.slice(0, 3).map((item) => item.value) ?? []),
+  ])];
+  async function refreshMusicProfile() {
+    try {
+      setSyncing(true);
+      setSyncError("");
+      const result = await syncMusicProfile();
+      setProfile((current) => current ? { ...current, music_profile: result.music_profile } : current);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "音乐画像同步失败");
+    } finally {
+      setSyncing(false);
+    }
+  }
+  function beginEditing() {
+    if (!profile) return;
+    setDraft(cloneExplicit(profile.explicit));
+    setEditError("");
+    setEditing(true);
+  }
+  async function saveProfile(event: FormEvent) {
+    event.preventDefault();
+    if (!draft) return;
+    const normalized = normalizeExplicit(draft);
+    const genreConflict = normalized.likedGenres.find((genre) => normalized.dislikedGenres.includes(genre));
+    const artistConflict = normalized.likedArtists.find((artist) => normalized.dislikedArtists.includes(artist));
+    if (genreConflict || artistConflict) {
+      setEditError(`${genreConflict ?? artistConflict} 不能同时出现在喜欢和不喜欢中`);
+      return;
+    }
+    try {
+      setSaving(true);
+      setEditError("");
+      const result = await updateProfile(normalized);
+      setProfile(result.profile);
+      setDraft(cloneExplicit(result.profile.explicit));
+      setEditing(false);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "画像保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }
   return (
     <section className="subpage">
       <div className="subpage-heading"><p className="eyebrow">账号级音乐画像</p><h1>你的声音偏好，正在变得具体</h1><p>显式选择和每一次反馈共同影响排序，你可以随时修正。</p></div>
       <div className="profile-grid">
         <section className="profile-band">
           <div className="profile-avatar">LY</div>
-          <div><p>当前画像</p><h2>{traits.length ? `偏爱${traits.join("、")}的陪伴感` : "正在形成你的音乐画像"}</h2><span>画像版本 {profile?.version ?? "读取中"} · 账号级持久化</span></div>
+          <div><p>当前画像</p><h2>{topGenres.length ? `偏好${topGenres.join("、")}` : "等待同步你的音乐画像"}</h2><span>{musicProfile ? `音乐画像 V${musicProfile.version} · 已分析 ${musicProfile.source_coverage.analyzedTrackCount} / ${musicProfile.source_coverage.libraryTrackCount} 首` : `账号画像版本 ${profile?.version ?? "读取中"}`}</span></div>
+          <div className="profile-actions">
+            <button className="profile-action" onClick={beginEditing}><Pencil size={15} />编辑画像</button>
+            <button className="profile-action" disabled={syncing} onClick={() => void refreshMusicProfile()}><RefreshCw size={16} className={syncing ? "is-spinning" : ""} />{syncing ? "分析中" : musicProfile ? "刷新画像" : "同步歌单"}</button>
+          </div>
         </section>
+        {syncError && <p className="profile-sync-error" role="alert">{syncError}</p>}
+        {editing && draft && (
+          <section className="profile-editor">
+            <form onSubmit={saveProfile}>
+              <div className="profile-editor-heading"><div><p>显式偏好</p><h3>编辑音乐画像</h3></div><Pencil size={18} /></div>
+              <div className="profile-editor-grid">
+                <ProfileTagEditor label="喜欢的曲风" values={draft.likedGenres} placeholder="例如：民谣" onChange={(values) => setDraft({ ...draft, likedGenres: values })} />
+                <ProfileTagEditor label="喜欢的歌手" values={draft.likedArtists} placeholder="添加歌手" onChange={(values) => setDraft({ ...draft, likedArtists: values })} />
+                <ProfileTagEditor label="常听语言" values={draft.languages} placeholder="例如：粤语" onChange={(values) => setDraft({ ...draft, languages: values })} />
+                <ProfileTagEditor label="不喜欢的曲风" values={draft.dislikedGenres} placeholder="排除曲风" onChange={(values) => setDraft({ ...draft, dislikedGenres: values })} />
+                <ProfileTagEditor label="不喜欢的歌手" values={draft.dislikedArtists} placeholder="排除歌手" onChange={(values) => setDraft({ ...draft, dislikedArtists: values })} />
+                <label className="profile-range"><span>熟悉度倾向</span><input type="range" min="0" max="100" value={Math.round(draft.familiarityBias * 100)} onChange={(event) => setDraft({ ...draft, familiarityBias: Number(event.target.value) / 100 })} /><strong>{Math.round(draft.familiarityBias * 100)}%</strong></label>
+              </div>
+              {editError && <p className="profile-edit-error" role="alert">{editError}</p>}
+              <div className="profile-editor-actions">
+                <button type="button" onClick={() => { setEditing(false); setEditError(""); }}>取消</button>
+                <button className="primary" type="submit" disabled={saving}><Save size={15} />{saving ? "保存中" : "保存画像"}</button>
+              </div>
+            </form>
+          </section>
+        )}
         <section className="preference-section">
           <div className="panel-title"><div><p>长期倾向</p><h3>熟悉与探索</h3></div><Compass size={19} /></div>
           <div className="preference-meter"><span style={{ width: `${familiarity}%` }} /></div>
           <div className="meter-label"><span>更熟悉</span><strong>{familiarity}%</strong><span>更新鲜</span></div>
-          <div className="preference-tags">{preferenceTags.map((tag) => <span key={tag}>{tag}</span>)}<button>+ 修正偏好</button></div>
+          <div className="preference-tags">{preferenceTags.map((tag) => <span key={tag}>{tag}</span>)}<button onClick={beginEditing}><Pencil size={11} />修正偏好</button></div>
         </section>
         <section className="scene-learning">
-          <div className="panel-title"><div><p>按场景学习</p><h3>你在不同状态下的选择</h3></div><SlidersHorizontal size={19} /></div>
-          {[["focus", "工作 / 学习"], ["emotional", "情绪陪伴"], ["travel", "旅行途中"]].map(([key, label]) => {
-            const scene = profile?.scene_preferences[key];
-            return <div className="scene-row" key={key}><span>{label}</span><div><i style={{ width: `${scene?.targetEnergy ?? 0}%` }} /></div><strong>{scene?.preferredTags.join("、") ?? "等待数据"}</strong></div>;
-          })}
+          <div className="panel-title"><div><p>偏好簇</p><h3>不同场景下的声音选择</h3></div><SlidersHorizontal size={19} /></div>
+          {(musicProfile?.preference_clusters.length ? musicProfile.preference_clusters : [["focus", "工作 / 学习"], ["emotional", "情绪陪伴"], ["travel", "旅行途中"]].map(([key, label]) => ({ id: key, label, weight: 0, genres: [], moods: [], energyCenter: profile?.scene_preferences[key]?.targetEnergy ?? 0, lyricDensity: "medium" as const, signals: profile?.scene_preferences[key]?.preferredTags ?? [] }))).map((cluster) => (
+            <div className="scene-row" key={cluster.id}><span>{cluster.label}</span><div><i style={{ width: `${cluster.energyCenter}%` }} /></div><strong>{[...cluster.genres, ...cluster.moods, ...cluster.signals].slice(0, 3).join("、") || "等待数据"}</strong></div>
+          ))}
         </section>
       </div>
     </section>
   );
 }
 
+function ProfileTagEditor({ label, values, placeholder, onChange }: { label: string; values: string[]; placeholder: string; onChange: (values: string[]) => void }) {
+  const [input, setInput] = useState("");
+  function addValues() {
+    const additions = input.split(/[,，、]/).map((value) => value.trim()).filter(Boolean);
+    if (!additions.length) return;
+    onChange([...new Set([...values, ...additions])].slice(0, 100));
+    setInput("");
+  }
+  return (
+    <div className="profile-field">
+      <label>{label}</label>
+      <div className="profile-edit-tags">
+        {values.map((value) => <span key={value}>{value}<button type="button" onClick={() => onChange(values.filter((item) => item !== value))} aria-label={`移除${value}`} title={`移除${value}`}><X size={12} /></button></span>)}
+      </div>
+      <div className="profile-tag-input"><input value={input} placeholder={placeholder} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addValues(); } }} /><button type="button" onClick={addValues} aria-label={`添加${label}`} title={`添加${label}`}><Plus size={15} /></button></div>
+    </div>
+  );
+}
+
+function cloneExplicit(explicit: ApiProfile["explicit"]): ApiProfile["explicit"] {
+  return { ...explicit, likedArtists: [...explicit.likedArtists], likedGenres: [...explicit.likedGenres], dislikedArtists: [...explicit.dislikedArtists], dislikedGenres: [...explicit.dislikedGenres], languages: [...explicit.languages] };
+}
+
+function normalizeExplicit(explicit: ApiProfile["explicit"]): ApiProfile["explicit"] {
+  const clean = (values: string[]) => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  return { ...explicit, likedArtists: clean(explicit.likedArtists), likedGenres: clean(explicit.likedGenres), dislikedArtists: clean(explicit.dislikedArtists), dislikedGenres: clean(explicit.dislikedGenres), languages: clean(explicit.languages) };
+}
+
 function SettingsView({ personalization, setPersonalization }: { personalization: boolean; setPersonalization: (value: boolean) => void }) {
+  const [connection, setConnection] = useState<NeteaseConnection | null>(null);
+  const [qrKey, setQrKey] = useState("");
+  const [qrImage, setQrImage] = useState("");
+  const [connectionError, setConnectionError] = useState("");
+  const [connectionLoading, setConnectionLoading] = useState(false);
   useEffect(() => { getProfile().then((result) => setPersonalization(result.profile.personalization_enabled)); }, [setPersonalization]);
+  useEffect(() => { getNeteaseConnection().then((result) => setConnection(result.connection)).catch(() => setConnectionError("音乐服务状态暂时无法读取")); }, []);
+  useEffect(() => {
+    if (!qrKey) return;
+    let active = true;
+    const timer = window.setInterval(async () => {
+      try {
+        const result = await checkNeteaseQr(qrKey);
+        if (!active) return;
+        setConnection(result.connection);
+        if (result.connection.status === "connected" || result.connection.status === "disconnected") {
+          setQrKey("");
+          setQrImage("");
+        }
+      } catch {
+        if (active) setConnectionError("二维码状态读取失败，请重新生成");
+      }
+    }, 2200);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [qrKey]);
+
+  async function connectNetease() {
+    try {
+      setConnectionLoading(true);
+      setConnectionError("");
+      const result = await createNeteaseQr();
+      setQrKey(result.key);
+      setQrImage(result.qr_image);
+      setConnection((current) => ({ status: "waiting", source: null, connectedAt: null, message: null, taste: current?.taste ?? null }));
+    } catch {
+      setConnectionError("二维码生成失败，请确认本地网易云服务正在运行");
+    } finally {
+      setConnectionLoading(false);
+    }
+  }
+
+  async function disconnectMusic() {
+    try {
+      await disconnectNetease();
+      setConnection({ status: "disconnected", source: null, connectedAt: null, message: null, taste: null });
+      setQrKey("");
+      setQrImage("");
+    } catch {
+      setConnectionError("暂时无法断开音乐账号");
+    }
+  }
   async function togglePersonalization() {
     const next = !personalization;
     setPersonalization(next);
@@ -552,13 +856,34 @@ function SettingsView({ personalization, setPersonalization }: { personalization
   }
   return (
     <section className="subpage settings-page">
-      <div className="subpage-heading"><p className="eyebrow">设置与隐私</p><h1>你的数据，由你决定</h1><p>画像、情境和反馈现已绑定当前账号；第三方音乐服务仍未连接。</p></div>
+      <div className="subpage-heading"><p className="eyebrow">设置与隐私</p><h1>你的数据，由你决定</h1><p>画像、情境和反馈绑定当前账号；网易授权只在服务端用于读取音乐偏好和播放权限。</p></div>
       <div className="settings-list">
         <div className="setting-row"><div className="setting-icon"><Sparkles size={19} /></div><div><strong>个性化学习</strong><span>用播放、跳过和反馈改进跨会话推荐</span></div><button className={`toggle ${personalization ? "is-on" : ""}`} onClick={() => void togglePersonalization()} aria-label="切换个性化学习"><span /></button></div>
-        <div className="setting-row"><div className="setting-icon"><Unplug size={19} /></div><div><strong>网易云音乐</strong><span>尚未连接 · 后续仅使用扫码或会话授权</span></div><button className="text-action">准备接入 <ChevronRight size={15} /></button></div>
+        <div className="setting-row"><div className="setting-icon"><Unplug size={19} /></div><div><strong>网易云音乐</strong><span>{connectionDescription(connection)}</span></div>{connection?.status === "connected" ? <button className="text-action" onClick={() => void disconnectMusic()}>断开</button> : <button className="text-action" disabled={connectionLoading} onClick={() => void connectNetease()}>{connectionLoading ? "生成中" : "扫码连接"} <ChevronRight size={15} /></button>}</div>
+        {qrImage && (
+          <div className="netease-qr-panel">
+            {/* QR is a server-generated data URL. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={qrImage} alt="网易云音乐登录二维码" />
+            <div><strong>{connection?.status === "scanned" ? "请在手机上确认" : "使用网易云音乐扫码"}</strong><span>二维码过期后可重新生成；授权 Cookie 不会发送到浏览器。</span></div>
+          </div>
+        )}
+        {connectionError && <p className="connection-error" role="alert">{connectionError}</p>}
         <div className="setting-row"><div className="setting-icon"><Shield size={19} /></div><div><strong>图片处理</strong><span>原图只用于本次理解，默认不长期保留</span></div><span className="setting-state"><Check size={15} /> 已开启</span></div>
         <div className="setting-row danger-row"><div className="setting-icon"><Trash2 size={19} /></div><div><strong>清除演示数据</strong><span>删除当前浏览器中的历史、反馈和画像</span></div><button className="text-action danger">清除数据</button></div>
       </div>
     </section>
   );
+}
+
+function connectionDescription(connection: NeteaseConnection | null) {
+  if (!connection) return "正在读取连接状态";
+  if (connection.status === "connected") {
+    const taste = connection.taste;
+    return taste ? `已连接 · ${taste.likedCount} 首喜欢 · ${taste.recordCount} 条播放画像` : "已连接 · 正在同步音乐画像";
+  }
+  if (connection.status === "waiting") return "等待扫码";
+  if (connection.status === "scanned") return "已扫码，等待手机确认";
+  if (connection.status === "unavailable") return connection.message ?? "密码登录不可用，请使用二维码";
+  return connection.message ?? "未连接 · 使用二维码授权账号画像与播放权限";
 }

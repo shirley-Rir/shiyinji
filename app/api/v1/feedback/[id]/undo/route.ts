@@ -4,7 +4,7 @@ import { requireApiUser } from "@/src/server/identity";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const { id } = await params;
     const undone = await repository.undoFeedback(user.id, id);

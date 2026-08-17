@@ -1,5 +1,6 @@
 import vinext from "vinext";
 import { defineConfig } from "vite";
+import { resolve } from "node:path";
 import hostingConfig from "./.openai/hosting.json";
 import { sites } from "./build/sites-vite-plugin";
 
@@ -43,7 +44,16 @@ export default defineConfig(async () => {
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
+  const isVpsBuild = process.env.VPS_BUILD === "true";
+
   return {
+    resolve: isVpsBuild
+      ? {
+          alias: {
+            "cloudflare:workers": resolve("src/runtime/cloudflare-workers-vps.ts"),
+          },
+        }
+      : undefined,
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

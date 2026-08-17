@@ -6,7 +6,7 @@ import { profilePatchRequest } from "@/src/server/request";
 
 export async function GET(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     return Response.json({ profile: presentProfile(await repository.getProfile(user.id)) });
   } catch (error) { return apiError(error); }
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const user = requireApiUser(request);
+    const user = await requireApiUser(request);
     await repository.ensureUser(user);
     const payload = profilePatchRequest.parse(await request.json());
     const profile = await repository.updateProfile(user.id, { explicit: payload.explicit, personalizationEnabled: payload.personalization_enabled });
