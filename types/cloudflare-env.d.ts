@@ -31,5 +31,11 @@ declare namespace Cloudflare {
     EMAIL_FROM_NAME?: string;
     EMAIL_CLIENT_HOSTNAME?: string;
     EMAIL_TIMEOUT_MS?: string;
+    COS_SECRET_ID?: string;
+    COS_SECRET_KEY?: string;
+    COS_REGION?: string;
+    COS_BUCKET?: string;
+    COS_SIGNED_URL_TTL_SECONDS?: string;
+    COS_IMAGE_MAX_BYTES?: string;
   }
 }

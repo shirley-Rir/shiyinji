@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { adjustRecommendation, checkNeteaseQr, createContextRecommendation, createNeteaseQr, disconnectNetease, getAuthSession, getHistory, getNeteaseConnection, getProfile, getTrackLyrics, logoutAccount, recordPlayback, resolvePlayback, sendFeedback, syncMusicProfile, updatePrivacy, updateProfile, type ApiContext, type ApiProfile, type ApiTrack, type ApiTrackLyrics, type AuthUser, type NeteaseConnection } from "@/src/client/api";
-import { prepareContextImage } from "@/src/client/image";
+import { validateContextImage } from "@/src/client/image";
 import { AuthScreen } from "./auth-screen";
 
 type View = "listen" | "history" | "profile" | "settings";
@@ -258,14 +258,14 @@ export function MusicApp() {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const prepared = await prepareContextImage(file);
+      const prepared = validateContextImage(file);
       if (imageUrl) URL.revokeObjectURL(imageUrl);
       setImageUrl(URL.createObjectURL(prepared));
       setImageName(file.name);
       setImageFile(prepared);
       setError("");
     } catch {
-      setError("图片处理失败，请换一张 JPEG、PNG 或 WebP 图片。");
+      setError("请选择不超过 25MB 的 JPEG、PNG 或 WebP 图片。");
       if (fileRef.current) fileRef.current.value = "";
     }
   }
@@ -471,7 +471,7 @@ export function MusicApp() {
                     <ImagePlus size={18} />
                     加一张照片
                   </button>
-                  <span className="privacy-note"><Shield size={14} /> 原图不会长期保存</span>
+                  <span className="privacy-note"><Shield size={14} /> 仅用于本次情境理解</span>
                   <button className="listen-button" type="submit" disabled={isLoading}>
                     {isLoading ? <><span className="loading-dot" /> 正在理解</> : <><Sparkles size={18} /> 开始听</>}
                   </button>

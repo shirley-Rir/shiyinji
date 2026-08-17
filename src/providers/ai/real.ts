@@ -31,7 +31,7 @@ export class OpenAICompatibleAIProvider implements AIProvider, RecommendationPla
   }
 
   async interpretContext(input: ContextInput): Promise<ContextInterpretation> {
-    const hasImage = Boolean(input.image?.dataUrl);
+    const hasImage = Boolean(input.image?.url || input.image?.dataUrl);
     let model = hasImage ? this.config.visionModel : this.config.textModel;
     if (!model) throw new Error("AI_VISION_MODEL_REQUIRED");
 
@@ -229,9 +229,10 @@ function trackKey(title: string, artist: string) {
 function userContent(input: ContextInput) {
   const text = input.text.trim() || "用户没有提供文字，请仅根据图片中可观察的信息理解此刻情境。";
   const contextText = `用户输入：${text}\n用户时区：${input.timezone ?? "unknown"}`;
-  if (!input.image?.dataUrl) return contextText;
+  const imageUrl = input.image?.url ?? (input.image?.dataUrl ? base64Image(input.image.dataUrl) : undefined);
+  if (!imageUrl) return contextText;
   return [
-    { type: "image_url", image_url: { url: base64Image(input.image.dataUrl) } },
+    { type: "image_url", image_url: { url: imageUrl } },
     { type: "text", text: contextText },
   ];
 }
@@ -264,7 +265,7 @@ function safeProviderReason(error: unknown) {
 }
 
 function sourceOf(input: ContextInput): ContextSource {
-  if (input.image?.dataUrl) return input.text.trim() ? "text_image" : "image";
+  if (input.image?.url || input.image?.dataUrl) return input.text.trim() ? "text_image" : "image";
   return "text";
 }
 

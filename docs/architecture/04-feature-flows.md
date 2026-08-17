@@ -127,16 +127,16 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     UPLOAD[浏览器上传] --> VALIDATE[类型与大小校验]
-    VALIDATE --> TEMP[临时对象存储]
-    TEMP --> AI[多模态理解]
-    AI --> TAGS[保存结构化标签]
-    TAGS --> PURGE[删除原图]
-    TEMP -. 超时任务 .-> PURGE
+    VALIDATE --> API[拾音记服务端]
+    API --> COS[私有 Tencent COS]
+    COS --> SIGN[生成短时签名读取链接]
+    SIGN --> AI[多模态理解]
+    AI --> TAGS[保存结构化标签与对象键]
 ```
 
-- 默认不把图片写入用户历史。
-- 调试环境保存原图必须单独征得同意，并设置到期时间。
-- 图片哈希只用于去重和审计，不能被用作跨产品追踪标识。
+- 原图保存在私有 COS；数据库不保存可访问链接，只保存对象键和必要元数据。
+- 视觉模型仅接收短时签名读取链接，默认有效期 10 分钟。
+- 原图留存、用户删除入口和生命周期规则见 `08-context-image-storage.md`；在规则上线前不得把“不会长期保存”作为前端承诺。
 
 ## 6. 音乐账号连接
 

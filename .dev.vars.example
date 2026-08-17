@@ -31,3 +31,11 @@ QQ_SMTP_AUTH_CODE=
 EMAIL_FROM_NAME=拾音记
 EMAIL_CLIENT_HOSTNAME=music.shilrey.top
 EMAIL_TIMEOUT_MS=15000
+
+# Private Tencent COS storage for context images. Keep credentials only in .dev.vars.
+COS_SECRET_ID=
+COS_SECRET_KEY=
+COS_REGION=ap-nanjing
+COS_BUCKET=boram-1333526493
+COS_SIGNED_URL_TTL_SECONDS=600
+COS_IMAGE_MAX_BYTES=26214400

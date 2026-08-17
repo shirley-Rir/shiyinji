@@ -82,6 +82,26 @@ test("vision requests use the configured vision model and multimodal content", a
   assert.match(content.find((item) => item.type === "text")?.text ?? "", /拾音记/);
 });
 
+test("vision requests pass a private signed image URL through unchanged", async () => {
+  let requestBody: { messages?: Array<{ content?: unknown }> } | undefined;
+  const signedUrl = "https://example.cos.ap-nanjing.myqcloud.com/context-images/u/scene.jpg?sign=temporary";
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    visionModel: "vision-model",
+    fetch: async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(modelOutput) } }] });
+    },
+  });
+
+  await provider.interpretContext({ text: "", image: { name: "scene.jpg", type: "image/jpeg", size: 4, url: signedUrl } });
+
+  const content = requestBody?.messages?.[0]?.content as Array<{ type?: string; image_url?: { url?: string } }>;
+  assert.equal(content.find((item) => item.type === "image_url")?.image_url?.url, signedUrl);
+});
+
 test("vision requests use a second visual model when the primary is rate limited", async () => {
   const requestedModels: string[] = [];
   const provider = new OpenAICompatibleAIProvider({

@@ -13,6 +13,7 @@
 - 前端：React 19、TypeScript、vinext、lucide-react。
 - 服务端：App Router API、Cloudflare Worker 兼容运行时。
 - 数据：Drizzle ORM + D1/本地 SQLite，画像按拾音记账号保存。
+- 图片：私有 Tencent COS 保存原图，视觉模型通过短时签名 URL 读取；部署变量见 `docs/architecture/08-context-image-storage.md`。
 - 语义模型：文本 `glm-4.7-flash`，图片/图文 `glm-4.6v-flash`。
 - 音乐服务：本地 NCM Enhanced API，仅用于封闭开发验证。
 - 推荐器：`weighted-ranker-v2`，先召回和硬约束过滤，再结合情境与账号画像二次排序。

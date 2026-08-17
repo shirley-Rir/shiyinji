@@ -44,9 +44,16 @@ export default defineConfig(async () => {
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
+  const isVpsBuild = process.env.VPS_BUILD === "true";
+
   return {
-    resolve: process.env.VPS_BUILD === "true"
-      ? { alias: { "cloudflare:workers": resolve("src/runtime/cloudflare-workers-vps.ts") } }
+    resolve: isVpsBuild
+      ? {
+          alias: {
+            "cloudflare:workers": resolve("src/runtime/cloudflare-workers-vps.ts"),
+            "@/src/services/context-image-storage": resolve("src/services/context-image-storage-vps.ts"),
+          },
+        }
       : undefined,
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }

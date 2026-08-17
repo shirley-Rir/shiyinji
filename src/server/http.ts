@@ -19,6 +19,8 @@ export function apiError(error: unknown): Response {
   if (code === "INVALID_OR_EXPIRED_CODE") return errorResponse(code, "验证码不正确或已过期", 401, false);
   if (code === "CODE_REQUEST_TOO_FREQUENT") return errorResponse(code, "验证码发送得有点频繁，请一分钟后再试", 429, true);
   if (code === "EMAIL_DELIVERY_UNAVAILABLE") return errorResponse(code, "验证码邮件暂时无法发送", 503, true);
+  if (code === "IMAGE_STORAGE_UNAVAILABLE") return errorResponse(code, "图片存储服务尚未配置完成", 503, false);
+  if (code === "IMAGE_STORAGE_UPLOAD_FAILED") return errorResponse(code, "图片上传暂时失败，请稍后再试", 503, true);
   if (code.startsWith("AI_PROVIDER_")) return errorResponse("AI_PROVIDER_UNAVAILABLE", "语义理解服务暂时不可用", 503, true);
   if (code.startsWith("NCM_API_ERROR")) return errorResponse("MUSIC_PROVIDER_UNAVAILABLE", "音乐服务暂时不可用", 503, true);
   console.error("[shiyinji-api]", error);
