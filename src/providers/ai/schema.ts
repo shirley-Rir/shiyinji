@@ -23,6 +23,13 @@ export const modelInterpretationSchema = z.object({
 
 export type ModelInterpretation = z.infer<typeof modelInterpretationSchema>;
 
+export const modelLyricIdentificationSchema = z.object({
+  is_lyrics: z.boolean(),
+  title: z.string().min(1).max(120).nullable(),
+  artist: z.string().min(1).max(120).nullable(),
+  confidence: boundedNumber(0, 1),
+});
+
 const shortStrings = (max: number) => z.array(z.string().min(1).max(80)).max(max);
 
 export const modelRecommendationBriefSchema = z.object({

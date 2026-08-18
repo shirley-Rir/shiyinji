@@ -1,10 +1,10 @@
-import { aiProvider } from "@/src/providers";
+import { aiProvider, lyricsIdentifier } from "@/src/providers";
 import { repository } from "@/src/repositories";
 import { apiError, errorResponse } from "@/src/server/http";
 import { requireApiUser } from "@/src/server/identity";
 import { presentContext } from "@/src/server/presenters";
 import { contextImageStorage } from "@/src/services/context-image-storage";
-import { createDirectPlayInterpretation } from "@/src/services/request-intent";
+import { createDirectPlayInterpretation, createLyricDirectPlayInterpretation, isLyricLookupCandidate } from "@/src/services/request-intent";
 
 const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const DEFAULT_MAX_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -43,7 +43,13 @@ export async function POST(request: Request) {
       url: storedImage.signedUrl,
     } : undefined;
     const contextInput = { text, image: modelImage, timezone: String(form.get("timezone") ?? "") || undefined };
-    const interpretation = createDirectPlayInterpretation(contextInput) ?? await aiProvider.interpretContext(contextInput);
+    const directPlay = createDirectPlayInterpretation(contextInput);
+    const lyricMatch = !directPlay && !image && lyricsIdentifier && isLyricLookupCandidate(text)
+      ? await lyricsIdentifier.identifyLyrics(text).catch(() => null)
+      : null;
+    const interpretation = directPlay
+      ?? (lyricMatch ? createLyricDirectPlayInterpretation(contextInput, lyricMatch) : null)
+      ?? await aiProvider.interpretContext(contextInput);
     const session = await repository.createContextSession(user.id, text, imageMetadata, interpretation);
 
     return Response.json({

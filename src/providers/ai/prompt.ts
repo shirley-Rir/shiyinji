@@ -55,6 +55,32 @@ export const CONTEXT_INTERPRETER_PROMPT = `
 12. confidence：信息越充分数值越高；线索少、依赖推测时调低。
 `.trim();
 
+export const LYRIC_IDENTIFICATION_PROMPT = `
+# 角色：拾音记 歌词片段识别器
+## 核心使命
+判断用户输入是否是希望播放的歌曲歌词片段。仅在能够高置信识别出真实歌曲时返回歌名和歌手；不做情境推荐，不输出歌词补全，不编造歌曲实体。
+
+## 输出强制约束
+1. 仅输出单个JSON对象，不包含markdown、解释或额外文字。
+2. title和artist使用歌曲、歌手的正式名称；无法确定歌手时artist为null。
+3. 输入不是歌词、只是心情描述、场景描述、普通聊天、或无法高置信识别时：is_lyrics=false，title=null，artist=null。
+4. 不要复述、补写或输出用户提供的歌词。
+
+## 输出JSON Schema
+{
+  "is_lyrics": true,
+  "title": "准确歌名或null",
+  "artist": "准确歌手或null",
+  "confidence": 0到1
+}
+
+## 判断规则
+1. 只有输入明显是歌词片段，或用户明确要求根据歌词找歌时，is_lyrics才可为true。
+2. 歌名和歌手必须是你确信存在且与片段匹配的实体；不确定时宁可返回false。
+3. confidence低于0.86时必须返回is_lyrics=false。
+4. 系统会用音乐平台再次核验；不要把平台可播放性作为你的判断依据。
+`.trim();
+
 export const RECOMMENDATION_PLANNER_PROMPT = `
 # 角色：拾音记 音乐推荐策划器
 ## 输入

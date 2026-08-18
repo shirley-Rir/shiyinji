@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { MockAIProvider } from "./ai/mock";
 import { OpenAICompatibleAIProvider } from "./ai/real";
 import { ResilientContextAIProvider } from "./ai/resilient";
-import type { AIProvider, RecommendationPlanner } from "./ai/types";
+import type { AIProvider, LyricsIdentifier, RecommendationPlanner } from "./ai/types";
 import { MockMusicProvider } from "./music/mock";
 import { NcmApiClient } from "./music/netease-client";
 import { NeteaseMusicProvider } from "./music/netease";
@@ -15,11 +15,14 @@ export const aiProvider: AIProvider = primaryAIProvider instanceof OpenAICompati
   ? new ResilientContextAIProvider(primaryAIProvider, new MockAIProvider())
   : primaryAIProvider;
 export const recommendationPlanner: RecommendationPlanner = primaryAIProvider;
+export const lyricsIdentifier: LyricsIdentifier | null = primaryAIProvider instanceof OpenAICompatibleAIProvider
+  ? primaryAIProvider
+  : null;
 const music = createMusicProvider();
 export const musicProvider = music.provider;
 export const neteaseSessionManager = music.sessions;
 
-export type { AIProvider, RecommendationPlanner } from "./ai/types";
+export type { AIProvider, LyricsIdentifier, RecommendationPlanner } from "./ai/types";
 export type { MusicProvider } from "./music/types";
 
 function createAIProvider() {

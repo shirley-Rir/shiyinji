@@ -1,7 +1,7 @@
 import type { ContextInput, ContextInterpretation, ContextSource, RecommendationBrief, RecommendationPlannerInput, StructuredContext } from "@/src/domain";
-import type { AIProvider, RecommendationPlanner } from "./types";
-import { CONTEXT_INTERPRETER_PROMPT, RECOMMENDATION_PLANNER_PROMPT } from "./prompt";
-import { modelInterpretationSchema, modelRecommendationBriefSchema, type ModelInterpretation, type ModelRecommendationBrief } from "./schema";
+import type { AIProvider, LyricsIdentifier, RecommendationPlanner } from "./types";
+import { CONTEXT_INTERPRETER_PROMPT, LYRIC_IDENTIFICATION_PROMPT, RECOMMENDATION_PLANNER_PROMPT } from "./prompt";
+import { modelInterpretationSchema, modelLyricIdentificationSchema, modelRecommendationBriefSchema, type ModelInterpretation, type ModelRecommendationBrief } from "./schema";
 
 type ProviderConfig = {
   apiKey: string;
@@ -21,7 +21,7 @@ type ChatCompletionResponse = {
   error?: { message?: string };
 };
 
-export class OpenAICompatibleAIProvider implements AIProvider, RecommendationPlanner {
+export class OpenAICompatibleAIProvider implements AIProvider, LyricsIdentifier, RecommendationPlanner {
   readonly name: string;
   private readonly request: typeof fetch;
 
@@ -75,6 +75,25 @@ export class OpenAICompatibleAIProvider implements AIProvider, RecommendationPla
       throw new Error("AI_PROVIDER_INVALID_RECOMMENDATION_BRIEF");
     }
     return guardRecommendationBrief(toRecommendationBrief(parsed, `real-ai:${this.config.textModel}`, input), input);
+  }
+
+  async identifyLyrics(text: string) {
+    const raw = await this.complete(
+      this.config.textModel,
+      LYRIC_IDENTIFICATION_PROMPT,
+      JSON.stringify({ user_input: text.trim() }),
+      true,
+      240,
+      0,
+    );
+    let parsed: { is_lyrics: boolean; title: string | null; artist: string | null; confidence: number };
+    try {
+      parsed = modelLyricIdentificationSchema.parse(JSON.parse(stripCodeFence(raw)));
+    } catch {
+      throw new Error("AI_PROVIDER_INVALID_LYRIC_IDENTIFICATION");
+    }
+    if (!parsed.is_lyrics || !parsed.title || parsed.confidence < 0.86) return null;
+    return { title: parsed.title, artist: parsed.artist, confidence: parsed.confidence };
   }
 
   private async complete(model: string, systemPrompt: string, content: unknown, jsonResponse: boolean, maxTokens: number, temperature: number, retryLimit?: number, multimodal = false): Promise<string> {

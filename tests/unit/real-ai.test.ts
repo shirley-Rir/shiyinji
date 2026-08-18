@@ -58,6 +58,36 @@ test("real AI provider maps structured JSON into the shared context contract", a
   assert.deepEqual(requestBody?.thinking, { type: "disabled" });
 });
 
+test("lyrics identification returns only high-confidence song entities", async () => {
+  let requestBody: { model?: string; response_format?: unknown; messages?: Array<{ content?: unknown }> } | undefined;
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    fetch: async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ is_lyrics: true, title: "平凡之路", artist: "朴树", confidence: 0.94 }) } }] });
+    },
+  });
+
+  const result = await provider.identifyLyrics("我曾经跨过山和大海");
+  assert.deepEqual(result, { title: "平凡之路", artist: "朴树", confidence: 0.94 });
+  assert.equal(requestBody?.model, "text-model");
+  assert.deepEqual(requestBody?.response_format, { type: "json_object" });
+  assert.match(JSON.stringify(requestBody?.messages), /歌词片段识别器/);
+});
+
+test("lyrics identification rejects uncertain matches", async () => {
+  const provider = new OpenAICompatibleAIProvider({
+    apiKey: "test-key",
+    baseUrl: "https://model.example/v1",
+    textModel: "text-model",
+    fetch: async () => Response.json({ choices: [{ message: { content: JSON.stringify({ is_lyrics: true, title: "猜测歌曲", artist: null, confidence: 0.62 }) } }] }),
+  });
+
+  assert.equal(await provider.identifyLyrics("一句模糊的话"), null);
+});
+
 test("vision requests use the configured vision model and multimodal content", async () => {
   let requestBody: { model?: string; messages?: Array<{ content?: unknown }> } | undefined;
   const provider = new OpenAICompatibleAIProvider({
